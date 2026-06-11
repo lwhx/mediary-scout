@@ -20,6 +20,7 @@ export interface WorkflowResult {
   status: WorkflowStatus;
   episodes: EpisodeState[];
   obtainedEpisodes: string[];
+  providerAheadEpisodes: string[];
   transferAttempts: TransferAttempt[];
   decisions: AgentDecision[];
   notification: NotificationEvent;
@@ -86,6 +87,7 @@ export async function runType2Initialization(input: {
   const obtainedEpisodes = reconciledEpisodes
     .filter((episode) => episode.obtained)
     .map((episode) => episode.episodeCode);
+  const providerAheadEpisodes = collectProviderAheadEpisodes(reconciledEpisodes);
   const notification: NotificationEvent = {
     id: "notification_run_type2",
     workflowRunId: TYPE2_WORKFLOW_RUN_ID,
@@ -99,6 +101,7 @@ export async function runType2Initialization(input: {
     status: "succeeded",
     episodes: reconciledEpisodes,
     obtainedEpisodes,
+    providerAheadEpisodes,
     transferAttempts,
     decisions: [decision],
     notification,
@@ -147,6 +150,7 @@ export async function runType3Monitoring(input: {
       status: "succeeded",
       episodes,
       obtainedEpisodes: episodes.filter((episode) => episode.obtained).map((episode) => episode.episodeCode),
+      providerAheadEpisodes: collectProviderAheadEpisodes(episodes),
       transferAttempts: [],
       decisions: [],
       notification,
@@ -226,6 +230,7 @@ export async function runType3Monitoring(input: {
     files: finalFiles,
   });
   const obtainedEpisodes = episodes.filter((episode) => episode.obtained).map((episode) => episode.episodeCode);
+  const providerAheadEpisodes = collectProviderAheadEpisodes(episodes);
   const notification: NotificationEvent = {
     id: "notification_run_type3",
     workflowRunId: TYPE3_WORKFLOW_RUN_ID,
@@ -239,6 +244,7 @@ export async function runType3Monitoring(input: {
     status: "succeeded",
     episodes,
     obtainedEpisodes,
+    providerAheadEpisodes,
     transferAttempts,
     decisions: [decision],
     notification,
@@ -253,6 +259,12 @@ function addRestoredEpisodes(restored: Set<string>, missingEpisodes: string[], f
       restored.add(file.episodeCode);
     }
   }
+}
+
+function collectProviderAheadEpisodes(episodes: EpisodeState[]): string[] {
+  return episodes
+    .filter((episode) => episode.obtained && episode.metadataStatus === "provider_ahead")
+    .map((episode) => episode.episodeCode);
 }
 
 function assertDecisionUsesSnapshot(

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   createEpisodeStates,
+  FakeAgentNodes,
   FakeResourceProvider,
   FakeStorageExecutor,
   reconcileVerifiedFiles,
@@ -244,6 +245,113 @@ describe("runType3Monitoring", () => {
     ).rejects.toThrow("Agent decision referenced candidates outside the current resource snapshot");
 
     await expect(storage.listVideoFiles(season.storageDirectoryId)).resolves.toEqual([]);
+  });
+
+  it("records provider-ahead files without waiting for metadata to catch up", async () => {
+    const { title, season } = qiaochuFixture();
+    const aheadSeason = { ...season, latestAiredEpisode: 20 };
+    const storage = new FakeStorageExecutor({
+      directories: { [aheadSeason.storageDirectoryId]: [] },
+      transferOutcomes: {
+        snapshot_1_candidate_1: {
+          status: "succeeded",
+          providerMessage: "",
+          files: [
+            {
+              id: "file_20",
+              storageDirectoryId: aheadSeason.storageDirectoryId,
+              name: "翘楚.S01E20.mkv",
+              sizeBytes: 1_000_000_000,
+              episodeCode: "S01E20",
+              providerFileId: "provider_20",
+            },
+            {
+              id: "file_21",
+              storageDirectoryId: aheadSeason.storageDirectoryId,
+              name: "翘楚.S01E21.mkv",
+              sizeBytes: 1_000_000_000,
+              episodeCode: "S01E21",
+              providerFileId: "provider_21",
+            },
+          ],
+        },
+      },
+    });
+    const resourceProvider = new FakeResourceProvider({
+      keywordResults: {
+        "翘楚 4K": [{ title: "翘楚 S01E20-S01E21 4K", episodeHints: ["S01E20", "S01E21"] }],
+      },
+    });
+    const initialEpisodes = createEpisodeStates({
+      trackedSeasonId: aheadSeason.id,
+      seasonNumber: aheadSeason.seasonNumber,
+      totalEpisodes: aheadSeason.totalEpisodes,
+      latestAiredEpisode: aheadSeason.latestAiredEpisode,
+    });
+
+    const result = await runType3Monitoring({
+      title,
+      season: aheadSeason,
+      episodes: initialEpisodes,
+      keyword: "翘楚 4K",
+      resourceProvider,
+      storage,
+      agents: new FakeAgentNodes(),
+    });
+
+    expect(result.episodes.find((episode) => episode.episodeCode === "S01E21")).toMatchObject({
+      obtained: true,
+      metadataStatus: "provider_ahead",
+    });
+    expect(result.providerAheadEpisodes).toEqual(["S01E21"]);
+  });
+
+  it("marks an episode obtained without searching when the target directory already has it", async () => {
+    const { title, season } = qiaochuFixture();
+    const currentFiles: VerifiedFile[] = Array.from({ length: 13 }, (_, index) => {
+      const episode = `S01E${String(index + 1).padStart(2, "0")}`;
+      return {
+        id: `file_${episode}`,
+        storageDirectoryId: season.storageDirectoryId,
+        name: `翘楚.${episode}.mkv`,
+        sizeBytes: 1_000_000_000,
+        episodeCode: episode,
+        providerFileId: `provider_${episode}`,
+      };
+    });
+    const initialEpisodes = reconcileVerifiedFiles({
+      season: { ...season, latestAiredEpisode: 13 },
+      episodes: createEpisodeStates({
+        trackedSeasonId: season.id,
+        seasonNumber: season.seasonNumber,
+        totalEpisodes: season.totalEpisodes,
+        latestAiredEpisode: 13,
+      }),
+      files: currentFiles.slice(0, 12),
+    });
+    const storage = new FakeStorageExecutor({
+      directories: { [season.storageDirectoryId]: currentFiles },
+    });
+    const resourceProvider = new FakeResourceProvider({
+      keywordErrors: { "翘楚 4K": "search should not be called" },
+      keywordResults: {},
+    });
+
+    const result = await runType3Monitoring({
+      title,
+      season: { ...season, latestAiredEpisode: 13 },
+      episodes: initialEpisodes,
+      keyword: "翘楚 4K",
+      resourceProvider,
+      storage,
+      agents: new FakeAgentNodes(),
+    });
+
+    expect(result.transferAttempts).toEqual([]);
+    expect(result.decisions).toEqual([]);
+    expect(result.episodes.find((episode) => episode.episodeCode === "S01E13")).toMatchObject({
+      obtained: true,
+    });
   });
 });
 
