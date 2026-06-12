@@ -3,6 +3,7 @@ import { Suspense } from "react";
 import { CheckCircle2, Clock3, Library, Search, TriangleAlert } from "lucide-react";
 import { AppSidebar } from "../components/app-sidebar";
 import { RequestTrackButton } from "../components/request-track-button";
+import { RememberQuery } from "../components/search-memory";
 import { SeasonRequestMenu } from "../components/season-request-menu";
 import { getSearchView } from "../lib/search-page";
 import { getLibraryWall, type LibraryWallEntry } from "../lib/title-hub";
@@ -27,15 +28,38 @@ export default async function Page({
           <Link className={activeTab === "search" ? "is-active" : ""} href={`/?tab=search&q=${encodeURIComponent(query)}`}>
             搜索获取
           </Link>
-          <Link className={activeTab === "library" ? "is-active" : ""} href="/?tab=library">
+          <Link
+            className={activeTab === "library" ? "is-active" : ""}
+            href={`/?tab=library&q=${encodeURIComponent(query)}`}
+          >
             我的媒体库
           </Link>
         </div>
 
         {activeTab === "search" ? (
-          <Suspense key={`search-${query}`} fallback={<SearchSurfaceSkeleton query={query} />}>
-            <SearchSurface query={query} />
-          </Suspense>
+          <section className="search-surface">
+            <RememberQuery query={query} />
+            <div className="search-hero">
+              <div>
+                <h1>搜索</h1>
+                <p>找到目标后发起获取，后台会处理资源判断、转存和验证。</p>
+              </div>
+              <form className="search-form" action="/" role="search">
+                <input type="hidden" name="tab" value="search" />
+                <label className="search-box search-box-large">
+                  <Search size={18} aria-hidden />
+                  <input name="q" aria-label="搜索媒体" placeholder="片名 / 剧名" defaultValue={query} />
+                </label>
+                <button className="primary-button" type="submit">
+                  <Search size={16} aria-hidden />
+                  搜索
+                </button>
+              </form>
+            </div>
+            <Suspense key={`search-${query}`} fallback={<SearchResultsSkeleton />}>
+              <SearchResults query={query} />
+            </Suspense>
+          </section>
         ) : (
           <Suspense fallback={<LibrarySurfaceSkeleton />}>
             <LibrarySurface />
@@ -46,7 +70,7 @@ export default async function Page({
   );
 }
 
-async function SearchSurface({ query }: { query: string }) {
+async function SearchResults({ query }: { query: string }) {
   const searchView = await getSearchView(query);
   // Library awareness on results: a tracked title shows WHICH seasons are
   // obtained and routes to the same title page as the library — search must
@@ -64,25 +88,7 @@ async function SearchSurface({ query }: { query: string }) {
   }
 
   return (
-    <section className="search-surface">
-      <div className="search-hero">
-        <div>
-          <h1>搜索</h1>
-          <p>找到目标后发起获取，后台会处理资源判断、转存和验证。</p>
-        </div>
-        <form className="search-form" action="/" role="search">
-          <input type="hidden" name="tab" value="search" />
-          <label className="search-box search-box-large">
-            <Search size={18} aria-hidden />
-            <input name="q" aria-label="搜索媒体" placeholder="片名 / 剧名" defaultValue={query} />
-          </label>
-          <button className="primary-button" type="submit">
-            <Search size={16} aria-hidden />
-            搜索
-          </button>
-        </form>
-      </div>
-
+    <>
       {searchView.state === "empty" ? (
         <div className="quiet-state">
           <Search size={24} aria-hidden />
@@ -125,7 +131,7 @@ async function SearchSurface({ query }: { query: string }) {
           )}
         </section>
       )}
-    </section>
+    </>
   );
 }
 
@@ -311,24 +317,12 @@ function PosterCard({ entry }: { entry: LibraryWallEntry }) {
   );
 }
 
-function SearchSurfaceSkeleton({ query }: { query: string }) {
+function SearchResultsSkeleton() {
   return (
-    <section className="search-surface">
-      <div className="search-hero">
-        <div>
-          <h1>搜索</h1>
-          <p>正在准备搜索界面。</p>
-        </div>
-        <div className="search-form">
-          <div className="skeleton skeleton-input">{query || "片名 / 剧名"}</div>
-          <div className="skeleton skeleton-button" />
-        </div>
-      </div>
-      <div className="candidate-grid">
-        <div className="skeleton-card" />
-        <div className="skeleton-card" />
-      </div>
-    </section>
+    <div className="candidate-grid" style={{ marginTop: 24 }}>
+      <div className="skeleton-card" />
+      <div className="skeleton-card" />
+    </div>
   );
 }
 

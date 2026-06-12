@@ -1,5 +1,6 @@
 import Link from "next/link";
-import { Bell, Film, Library, Search, ShieldCheck } from "lucide-react";
+import { Bell, Film, Library, ShieldCheck } from "lucide-react";
+import { SearchNavLink } from "./search-memory";
 
 export function AppSidebar({
   active,
@@ -23,13 +24,7 @@ export function AppSidebar({
       <nav aria-label="主导航">
         <ul className="nav-list">
           <li>
-            <Link
-              className={`nav-item ${active === "search" ? "is-active" : ""}`}
-              href={`/?tab=search&q=${encodeURIComponent(searchQuery)}`}
-            >
-              <Search size={16} aria-hidden />
-              搜索
-            </Link>
+            <SearchNavLink active={active === "search"} knownQuery={searchQuery} />
           </li>
           <li>
             <Link

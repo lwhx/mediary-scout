@@ -286,13 +286,30 @@ p {
   transition: transform 0.1s ease, background 0.15s ease;
 }
 
-.primary-button:hover {
-  transform: scale(1.04);
+.primary-button {
+  transition: background 0.15s ease, transform 0.1s ease;
 }
 
-.primary-button:active {
+.primary-button:hover:not(:disabled) {
+  background: #3be477;
+}
+
+.primary-button:active:not(:disabled) {
   background: var(--accent-press);
-  transform: scale(1);
+  transform: translateY(1px);
+}
+
+/* Icon micro-interaction: the + (or download/layers) pops, the pill stays put */
+.primary-button svg,
+.season-request-button svg,
+.secondary-button svg {
+  transition: transform 0.18s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.primary-button:hover:not(:disabled) svg,
+.season-request-button:hover:not(:disabled) svg,
+.secondary-button:hover svg {
+  transform: scale(1.2);
 }
 
 .primary-button:disabled {
@@ -1802,4 +1819,28 @@ li.hub-season-row.untracked {
 .menu-spacer {
   display: inline-block;
   width: 13px;
+}
+
+/* Split button: both halves light up as one control */
+.season-menu .primary-button,
+.season-menu-toggle {
+  transition: background 0.15s ease;
+}
+
+.season-menu:hover .primary-button:not(:disabled),
+.season-menu:hover .season-menu-toggle:not(:disabled) {
+  background: #3be477;
+}
+
+.season-menu .primary-button:active:not(:disabled),
+.season-menu-toggle:active:not(:disabled) {
+  background: var(--accent-press);
+}
+
+.season-menu-toggle svg {
+  transition: transform 0.2s ease;
+}
+
+.season-menu-toggle[aria-expanded="true"] svg {
+  transform: rotate(180deg);
 }
