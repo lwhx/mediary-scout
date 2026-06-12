@@ -362,6 +362,12 @@ class RecordingCandidateStorage implements StorageExecutor {
     return [];
   }
 
+  async listUnparsedVideoFiles() {
+    return [];
+  }
+
+  async renameFile(): Promise<void> {}
+
   async transfer(input: {
     workflowRunId: string;
     directoryId: string;
@@ -667,6 +673,86 @@ describe("pre-acquisition reconcile of existing season content", () => {
     expect(result.status).toBe("succeeded");
     expect(result.transferAttempts).toEqual([]);
     expect(result.obtainedEpisodes).toEqual(["S01E01"]);
+  });
+});
+
+describe("canonical rename of landed files", () => {
+  it("renames agent-recognized staging files so the landed name itself exposes the episode", async () => {
+    const title: MediaTitle = {
+      id: "title_show",
+      tmdbId: 1,
+      type: "tv",
+      title: "Show",
+      originalTitle: "Show",
+      year: 2026,
+      aliases: [],
+    };
+    const season: TrackedSeason = {
+      id: "season_show_1",
+      mediaTitleId: title.id,
+      seasonNumber: 1,
+      status: "active",
+      qualityPreference: "4K",
+      storageDirectoryId: "dir_show_s1",
+      totalEpisodes: 1,
+      latestAiredEpisode: 1,
+      latestAiredSource: "metadata",
+    };
+    const storage = new FakeStorageExecutor({
+      directories: { dir_show_s1: [] },
+      transferOutcomes: {
+        snapshot_1_candidate_1: {
+          status: "succeeded",
+          providerMessage: "",
+          files: [
+            {
+              id: "landed_weird",
+              storageDirectoryId: "set_by_fake",
+              name: "Episode 01.mkv",
+              sizeBytes: 1_000_000_000,
+              episodeCode: "S01E01",
+              providerFileId: "landed_weird",
+            },
+          ],
+        },
+      },
+    });
+
+    const result = await runType2Initialization({
+      title,
+      season,
+      keyword: "Show 4K",
+      storageParentDirectoryId: "library_root",
+      resourceProvider: new FakeResourceProvider({
+        keywordResults: {
+          "Show 4K": [{ title: "Show S01E01 4K", episodeHints: ["S01E01"] }],
+        },
+      }),
+      storage,
+      agents: new FakeAgentNodes({
+        packageRecognition: {
+          node: "test_recognition",
+          fileMappings: [
+            {
+              providerFileId: "landed_weird",
+              seasonNumber: 1,
+              episodeNumber: 1,
+              confidence: "high",
+              reason: "single episode file in a single-episode resource",
+            },
+          ],
+          rejectedProviderFileIds: [],
+          confidence: "high",
+          reason: "episode 1",
+        },
+      }),
+    });
+
+    expect(result.status).toBe("succeeded");
+    const files = await storage.listVideoFiles("dir_show_s1");
+    expect(files).toHaveLength(1);
+    expect(files[0]?.name).toBe("Show.S01E01.mkv");
+    expect(result.auditEvents.map((event) => event.type)).toContain("landed_file_renamed");
   });
 });
 

@@ -1,5 +1,6 @@
 import {
   createEpisodeStates,
+  episodeCode,
   reconcileVerifiedFiles,
   type AcquisitionFailureEvidence,
   type AgentDecision,
@@ -14,6 +15,7 @@ import {
   type WorkflowStatus,
 } from "./domain.js";
 import { buildConfirmedDedupPlan } from "./dedup.js";
+import { canonicalEpisodeFileName, episodeCodeFromFileName } from "./episode-code.js";
 import {
   buildAgentAssistedPackageNormalizationPlan,
   type PackageMoveAction,
@@ -91,7 +93,14 @@ export async function runType2Initialization(input: {
   // The need set is what the season directory is actually missing, not the
   // full aired list: a re-run of an initialization that already landed files
   // must not re-transfer them.
-  const existingFiles = await input.storage.listVideoFiles(season.storageDirectoryId);
+  const existingFiles = await listSeasonVideoFilesWithRescue({
+    storage: input.storage,
+    agents: input.agents,
+    title: input.title,
+    seasonNumber: season.seasonNumber,
+    directoryId: season.storageDirectoryId,
+    auditEvents,
+  });
   const episodes =
     existingFiles.length === 0
       ? freshEpisodes
@@ -243,7 +252,14 @@ export async function runType3Monitoring(input: {
     );
   }
   const auditEvents: AuditEvent[] = [];
-  const currentFiles = await input.storage.listVideoFiles(input.season.storageDirectoryId);
+  const currentFiles = await listSeasonVideoFilesWithRescue({
+    storage: input.storage,
+    agents: input.agents,
+    title: input.title,
+    seasonNumber: input.season.seasonNumber,
+    directoryId: input.season.storageDirectoryId,
+    auditEvents,
+  });
   let episodes = reconcileVerifiedFiles({
     season: input.season,
     episodes: input.episodes.map((episode) => {
@@ -464,7 +480,14 @@ export async function runSeriesInitialization(input: {
     });
     // The need set is what each canonical season directory is actually
     // missing: a re-run never re-transfers episodes a previous run landed.
-    const existingFiles = await input.storage.listVideoFiles(season.storageDirectoryId);
+    const existingFiles = await listSeasonVideoFilesWithRescue({
+      storage: input.storage,
+      agents: input.agents,
+      title: input.title,
+      seasonNumber: seasonMeta.seasonNumber,
+      directoryId: season.storageDirectoryId,
+      auditEvents,
+    });
     const episodes =
       existingFiles.length === 0
         ? freshEpisodes
@@ -797,7 +820,135 @@ async function normalizeStagingDirectory(input: {
       fileIds: actions.map((action) => action.providerFileId),
       targetDirectoryId: seasonDirectoryId,
     });
+
+    // Path context dies with the move: a landed file is an episode only if
+    // its NAME alone says so. Files whose names disagree with the plan's
+    // mapping (agent-recognized names, season-blind "第N集" names) are
+    // renamed to the canonical form the plan computed.
+    for (const action of actions) {
+      const sourceName = action.sourcePath.split("/").at(-1) ?? action.sourcePath;
+      if (episodeCodeFromFileName(sourceName) === action.episodeCode) {
+        continue;
+      }
+      const newName = action.targetRelativePath.split("/").at(-1) ?? action.targetRelativePath;
+      try {
+        await input.storage.renameFile({
+          directoryId: seasonDirectoryId,
+          fileId: action.providerFileId,
+          newName,
+        });
+      } catch (error) {
+        input.auditEvents.push({
+          type: "landed_file_rename_failed",
+          message: `Rename of landed file ${sourceName} failed; it stays invisible until rescued`,
+          data: { providerFileId: action.providerFileId, error: String(error) },
+        });
+        continue;
+      }
+      input.auditEvents.push({
+        type: "landed_file_renamed",
+        message: `Landed file ${sourceName} renamed to canonical ${newName}`,
+        data: { providerFileId: action.providerFileId, episodeCode: action.episodeCode, newName },
+      });
+    }
   }
+}
+
+/**
+ * Season-directory listing with rescue. Video files whose names expose no
+ * episode code are invisible to verification, marking, and dedup — silent
+ * holes that trigger wasteful re-acquisition. When any exist, the package
+ * recognition agent judges their episode identity; confirmed files are
+ * renamed to the canonical parseable form (one agent confirmation, then
+ * deterministic forever). Unconfirmed files stay untouched and are surfaced
+ * as audit warnings — never guessed, never deleted.
+ */
+async function listSeasonVideoFilesWithRescue(input: {
+  storage: StorageExecutor;
+  agents: AgentNodes;
+  title: MediaTitle;
+  seasonNumber: number;
+  directoryId: string;
+  auditEvents: AuditEvent[];
+}): Promise<VerifiedFile[]> {
+  const unparsed = await input.storage.listUnparsedVideoFiles(input.directoryId);
+  if (unparsed.length > 0) {
+    const decision = await input.agents.recognizePackage({
+      title: input.title.title,
+      year: input.title.year,
+      files: unparsed.map((file) => ({
+        path: file.name,
+        providerFileId: file.providerFileId,
+        sizeBytes: file.sizeBytes,
+      })),
+      parserEvidence: unparsed.map((file) => ({
+        providerFileId: file.providerFileId,
+        path: file.name,
+        parsedSeasonNumber: null,
+        parsedEpisodeNumber: null,
+        confidence: "low",
+        evidence: ["file name exposes no episode identity"],
+      })),
+    });
+    const rescuedIds = new Set<string>();
+    if (decision.confidence !== "low") {
+      for (const mapping of decision.fileMappings) {
+        if (mapping.confidence === "low") {
+          continue;
+        }
+        const source = unparsed.find((file) => file.providerFileId === mapping.providerFileId);
+        if (source === undefined) {
+          continue;
+        }
+        if (mapping.seasonNumber !== input.seasonNumber) {
+          input.auditEvents.push({
+            type: "unparsed_file_out_of_scope",
+            message: `${source.name} maps to season ${mapping.seasonNumber}, not season ${input.seasonNumber}; left untouched`,
+            data: { providerFileId: source.providerFileId, mapping },
+          });
+          continue;
+        }
+        const code = episodeCode(mapping.seasonNumber, mapping.episodeNumber);
+        const newName = canonicalEpisodeFileName({
+          title: input.title.title,
+          episodeCode: code,
+          sourceName: source.name,
+        });
+        try {
+          await input.storage.renameFile({
+            directoryId: input.directoryId,
+            fileId: source.providerFileId,
+            newName,
+          });
+        } catch (error) {
+          input.auditEvents.push({
+            type: "unparsed_file_rename_failed",
+            message: `Rename of ${source.name} failed; file stays unparsed`,
+            data: { providerFileId: source.providerFileId, error: String(error) },
+          });
+          continue;
+        }
+        rescuedIds.add(source.providerFileId);
+        input.auditEvents.push({
+          type: "unparsed_file_rescued",
+          message: `${source.name} agent-confirmed as ${code}; renamed to ${newName}`,
+          data: { providerFileId: source.providerFileId, episodeCode: code, newName, reason: mapping.reason },
+        });
+      }
+    }
+    const remaining = unparsed.filter((file) => !rescuedIds.has(file.providerFileId));
+    if (remaining.length > 0) {
+      input.auditEvents.push({
+        type: "unparsed_files_present",
+        message: `${remaining.length} video files in directory ${input.directoryId} expose no episode identity and were not agent-confirmed; they are invisible to verification`,
+        data: {
+          directoryId: input.directoryId,
+          files: remaining.map((file) => ({ providerFileId: file.providerFileId, name: file.name })),
+        },
+      });
+    }
+  }
+  return input.storage.listVideoFiles(input.directoryId);
 }
 
 async function stillMissingAcrossSeasons(input: {

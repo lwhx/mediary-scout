@@ -609,6 +609,7 @@ class FakePan115Api implements Pan115StorageApi {
   readonly offlineTasks: Array<{ url: string; directoryId: string }> = [];
   readonly moves: Array<{ fileIds: string[]; targetDirectoryId: string }> = [];
   readonly deletes: Array<{ fileIds: string[] }> = [];
+  readonly renames: Array<{ fileId: string; newName: string }> = [];
   readonly listCalls: string[] = [];
   private nextFolder = 1;
 
@@ -691,6 +692,20 @@ class FakePan115Api implements Pan115StorageApi {
 
   async deleteItems(input: { fileIds: string[] }): Promise<Pan115ActionResult> {
     this.deletes.push({ fileIds: [...input.fileIds] });
+    return { ok: true, message: "" };
+  }
+
+  async renameFile(input: { fileId: string; newName: string }): Promise<Pan115ActionResult> {
+    this.renames.push({ ...input });
+    for (const items of Object.values(this.directories)) {
+      for (const item of items) {
+        const fileId = String(item.fid ?? item.file_id ?? item.id ?? "");
+        if (fileId === input.fileId) {
+          item.name = input.newName;
+          item.n = input.newName;
+        }
+      }
+    }
     return { ok: true, message: "" };
   }
 }

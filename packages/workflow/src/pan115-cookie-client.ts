@@ -146,6 +146,13 @@ export class Pan115CookieClient implements Pan115StorageApi {
     return actionResultFromResponse(response);
   }
 
+  async renameFile(input: { fileId: string; newName: string }): Promise<Pan115ActionResult> {
+    const response = await this.postForm(`${PAN115_WEBAPI_BASE_URL}/files/batch_rename`, [
+      [`files_new_name[${input.fileId}]`, input.newName],
+    ]);
+    return actionResultFromResponse(response);
+  }
+
   private async getJson(url: string, params: Array<[string, string]>): Promise<unknown> {
     const query = new URLSearchParams(params);
     return this.fetchJson(`${url}?${query.toString()}`, {

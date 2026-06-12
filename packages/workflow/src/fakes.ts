@@ -11,12 +11,14 @@ import type {
   PackageRecognitionInput,
 } from "./package-normalizer.js";
 import type { PackageTreeFile } from "./package-normalizer.js";
+import { episodeCodeFromFileName } from "./episode-code.js";
 import type {
   AcquisitionPlanningInput,
   AcquisitionPlanningResult,
   AgentNodes,
   ResourceProvider,
   StorageExecutor,
+  UnparsedVideoFile,
 } from "./ports.js";
 
 export type FakePackageTreeFile = PackageTreeFile & { episodeCode?: string };
@@ -91,12 +93,21 @@ export class FakeStorageExecutor implements StorageExecutor {
 
   private readonly packageTrees: Map<string, FakePackageTreeFile[]>;
 
+  private readonly unparsedFiles: Map<string, UnparsedVideoFile[]>;
+
   constructor(input: {
     directories?: Record<string, VerifiedFile[]>;
     transferOutcomes?: Record<string, TransferOutcome>;
     nestedDirectories?: Set<string>;
     packageTrees?: Record<string, FakePackageTreeFile[]>;
+    unparsedFiles?: Record<string, UnparsedVideoFile[]>;
   } = {}) {
+    this.unparsedFiles = new Map(
+      Object.entries(input.unparsedFiles ?? {}).map(([directoryId, files]) => [
+        directoryId,
+        files.map((file) => ({ ...file })),
+      ]),
+    );
     this.packageTrees = new Map(
       Object.entries(input.packageTrees ?? {}).map(([directoryId, files]) => [
         directoryId,
@@ -130,6 +141,43 @@ export class FakeStorageExecutor implements StorageExecutor {
 
   async listVideoFiles(directoryId: string): Promise<VerifiedFile[]> {
     return this.filesFor(directoryId).map((file) => ({ ...file }));
+  }
+
+  async listUnparsedVideoFiles(directoryId: string): Promise<UnparsedVideoFile[]> {
+    return (this.unparsedFiles.get(directoryId) ?? []).map((file) => ({ ...file }));
+  }
+
+  async renameFile(input: { directoryId: string; fileId: string; newName: string }): Promise<void> {
+    const unparsed = this.unparsedFiles.get(input.directoryId) ?? [];
+    const unparsedIndex = unparsed.findIndex((file) => file.providerFileId === input.fileId);
+    if (unparsedIndex >= 0) {
+      const [file] = unparsed.splice(unparsedIndex, 1);
+      const episodeCode = episodeCodeFromFileName(input.newName);
+      if (episodeCode === null) {
+        unparsed.push({ ...file!, name: input.newName });
+      } else {
+        this.filesFor(input.directoryId).push({
+          id: file!.providerFileId,
+          storageDirectoryId: input.directoryId,
+          name: input.newName,
+          sizeBytes: file!.sizeBytes,
+          episodeCode,
+          providerFileId: file!.providerFileId,
+        });
+      }
+      this.unparsedFiles.set(input.directoryId, unparsed);
+      return;
+    }
+    const files = this.filesFor(input.directoryId);
+    const verified = files.find((file) => file.id === input.fileId);
+    if (verified === undefined) {
+      throw new Error(`fake renameFile: file ${input.fileId} not found in ${input.directoryId}`);
+    }
+    verified.name = input.newName;
+    const episodeCode = episodeCodeFromFileName(input.newName);
+    if (episodeCode !== null) {
+      verified.episodeCode = episodeCode;
+    }
   }
 
   async transfer(input: {
@@ -224,15 +272,26 @@ export class FakeStorageExecutor implements StorageExecutor {
           continue;
         }
         moved.push(treeFile.providerFileId);
+        const baseName = treeFile.path.split("/").at(-1) ?? treeFile.path;
         if (treeFile.episodeCode !== undefined) {
           this.filesFor(input.targetDirectoryId).push({
             id: treeFile.providerFileId,
             storageDirectoryId: input.targetDirectoryId,
-            name: treeFile.path.split("/").at(-1) ?? treeFile.path,
+            name: baseName,
             sizeBytes: treeFile.sizeBytes,
             episodeCode: treeFile.episodeCode,
             providerFileId: treeFile.providerFileId,
           });
+        } else {
+          // No episode identity in the name: the real executor cannot see
+          // this file as an episode — it lands as an unparsed video.
+          const unparsed = this.unparsedFiles.get(input.targetDirectoryId) ?? [];
+          unparsed.push({
+            providerFileId: treeFile.providerFileId,
+            name: baseName,
+            sizeBytes: treeFile.sizeBytes,
+          });
+          this.unparsedFiles.set(input.targetDirectoryId, unparsed);
         }
       }
       this.packageTrees.set(stagingId, keep);

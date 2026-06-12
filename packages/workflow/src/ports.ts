@@ -17,9 +17,20 @@ export interface ResourceProvider {
   search(input: { keyword: string }): Promise<ResourceSnapshot>;
 }
 
+/** A video file whose name exposes no episode identity — invisible to verification until rescued. */
+export interface UnparsedVideoFile {
+  providerFileId: string;
+  name: string;
+  sizeBytes: number;
+}
+
 export interface StorageExecutor {
   createDirectory(input: { name: string; parentId: string }): Promise<string>;
   listVideoFiles(directoryId: string): Promise<VerifiedFile[]>;
+  /** Video files in the directory whose names expose no parseable episode code. */
+  listUnparsedVideoFiles(directoryId: string): Promise<UnparsedVideoFile[]>;
+  /** Rename a single file in place (same directory). */
+  renameFile(input: { directoryId: string; fileId: string; newName: string }): Promise<void>;
   transfer(input: {
     workflowRunId: string;
     directoryId: string;

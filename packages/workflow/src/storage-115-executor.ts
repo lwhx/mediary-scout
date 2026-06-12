@@ -4,8 +4,9 @@ import type {
   TransferStatus,
   VerifiedFile,
 } from "./domain.js";
+import { episodeCodeFromFileName } from "./episode-code.js";
 import type { PackageTreeFile } from "./package-normalizer.js";
-import type { StorageExecutor } from "./ports.js";
+import type { StorageExecutor, UnparsedVideoFile } from "./ports.js";
 
 const DEFAULT_VIDEO_EXTENSIONS = [
   ".mp4",
@@ -75,6 +76,7 @@ export interface Pan115StorageApi {
   addOfflineTask(input: { url: string; directoryId: string }): Promise<Pan115ActionResult>;
   moveItems(input: { fileIds: string[]; targetDirectoryId: string }): Promise<Pan115ActionResult>;
   deleteItems(input: { fileIds: string[] }): Promise<Pan115ActionResult>;
+  renameFile(input: { fileId: string; newName: string }): Promise<Pan115ActionResult>;
 }
 
 export interface Storage115ExecutorOptions {
@@ -307,6 +309,20 @@ export class Storage115Executor implements StorageExecutor {
   async listVideoFiles(directoryId: string): Promise<VerifiedFile[]> {
     const videos = await this.collectVideos(directoryId, directoryId);
     return videos.map((video) => video.file);
+  }
+
+  async listUnparsedVideoFiles(directoryId: string): Promise<UnparsedVideoFile[]> {
+    return this.collectUnparsedVideos(directoryId);
+  }
+
+  async renameFile(input: { directoryId: string; fileId: string; newName: string }): Promise<void> {
+    await this.assertWithinWriteScope(input.directoryId, "rename file");
+    const result = await this.callApi("renameFile", () =>
+      this.api.renameFile({ fileId: input.fileId, newName: input.newName }),
+    );
+    if (!result.ok) {
+      throw new Error(`PAN115_RENAME_FAILED: ${result.message}`);
+    }
   }
 
   async transfer(input: {
@@ -576,6 +592,30 @@ export class Storage115Executor implements StorageExecutor {
     return videos;
   }
 
+  private async collectUnparsedVideos(directoryId: string): Promise<UnparsedVideoFile[]> {
+    const items = await this.callApi("listItems", () => this.api.listItems({ directoryId }));
+    const unparsed: UnparsedVideoFile[] = [];
+    for (const item of items) {
+      if (isDirectory(item)) {
+        const childDirectoryId = directoryIdFromItem(item);
+        if (childDirectoryId) {
+          unparsed.push(...(await this.collectUnparsedVideos(childDirectoryId)));
+        }
+        continue;
+      }
+      const name = itemName(item);
+      if (!isVideoName(name, this.videoExtensions) || episodeCodeFromFileName(name) !== null) {
+        continue;
+      }
+      const providerFileId = fileIdFromItem(item);
+      if (!providerFileId) {
+        continue;
+      }
+      unparsed.push({ providerFileId, name, sizeBytes: numberValue(item.size ?? item.s) });
+    }
+    return unparsed;
+  }
+
   private async callApi<T>(operation: Pan115Operation, call: () => Promise<T>): Promise<T> {
     return this.apiGuard.run(operation, call);
   }
@@ -766,7 +806,7 @@ function verifiedFileFromItem(
   if (!isVideoName(name, videoExtensions)) {
     return null;
   }
-  const episodeCode = episodeCodeFromName(name);
+  const episodeCode = episodeCodeFromFileName(name);
   if (!episodeCode) {
     return null;
   }
@@ -809,20 +849,6 @@ function itemName(item: Pan115Item): string {
 function isVideoName(name: string, videoExtensions: Set<string>): boolean {
   const lower = name.toLowerCase();
   return Array.from(videoExtensions).some((extension) => lower.endsWith(extension));
-}
-
-function episodeCodeFromName(name: string): string | null {
-  const seasonEpisodeMatch = /[Ss](\d{1,2})[Ee](\d{1,3})/.exec(name);
-  if (seasonEpisodeMatch?.[1] && seasonEpisodeMatch[2]) {
-    return `S${seasonEpisodeMatch[1].padStart(2, "0")}E${seasonEpisodeMatch[2].padStart(2, "0")}`;
-  }
-
-  const chineseEpisodeMatch = /第\s*(\d{1,3})\s*集/.exec(name);
-  if (chineseEpisodeMatch?.[1]) {
-    return `S01E${chineseEpisodeMatch[1].padStart(2, "0")}`;
-  }
-
-  return null;
 }
 
 function normalizeDirectoryId(directoryId: string): string {

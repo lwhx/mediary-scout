@@ -196,6 +196,22 @@ describe("Pan115CookieClient", () => {
     ]);
   });
 
+  it("renames a file through files/batch_rename", async () => {
+    const requests: RecordedRequest[] = [];
+    const client = new Pan115CookieClient({
+      cookie: "cookie",
+      fetchJson: recordFetch(requests, {
+        "https://webapi.115.com/files/batch_rename": { state: true },
+      }),
+    });
+
+    await expect(
+      client.renameFile({ fileId: "file_1", newName: "Show.S01E01.mkv" }),
+    ).resolves.toEqual({ ok: true, message: "" });
+
+    expect(requests[0]?.body).toBe("files_new_name%5Bfile_1%5D=Show.S01E01.mkv");
+  });
+
   it("fails magnet offline tasks explicitly until encrypted 115 payload support is added", async () => {
     const client = new Pan115CookieClient({
       cookie: "cookie",

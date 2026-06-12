@@ -663,3 +663,125 @@ describe("runType3Monitoring dedup", () => {
     expect(auditTypes).toContain("dedup_verified");
   });
 });
+
+describe("unparsed video file rescue", () => {
+  function initialEpisodesFor(season: TrackedSeason, files: VerifiedFile[]) {
+    return reconcileVerifiedFiles({
+      season,
+      episodes: createEpisodeStates({
+        trackedSeasonId: season.id,
+        seasonNumber: season.seasonNumber,
+        totalEpisodes: season.totalEpisodes,
+        latestAiredEpisode: season.latestAiredEpisode,
+      }),
+      files,
+    });
+  }
+
+  it("rescues an agent-confirmed unparsed file by canonical rename instead of re-acquiring", async () => {
+    const { title, season } = qiaochuFixture();
+    // E01-E13 parseable; E14 exists but its name exposes no episode code.
+    const existingFiles = obtainedFiles(13, season.storageDirectoryId);
+    const storage = new FakeStorageExecutor({
+      directories: { [season.storageDirectoryId]: existingFiles },
+      unparsedFiles: {
+        [season.storageDirectoryId]: [
+          { providerFileId: "weird_e14", name: "QiaoChu.FourTeen.4K.mkv", sizeBytes: 2_000_000_000 },
+        ],
+      },
+    });
+    let planCalls = 0;
+    const agents = new (class extends FakeAgentNodes {
+      override async planAcquisition(input: AcquisitionPlanningInput): Promise<AcquisitionPlanningResult> {
+        planCalls += 1;
+        return super.planAcquisition(input);
+      }
+    })({
+      packageRecognition: {
+        node: "test_rescue",
+        fileMappings: [
+          {
+            providerFileId: "weird_e14",
+            seasonNumber: 1,
+            episodeNumber: 14,
+            confidence: "high",
+            reason: "FourTeen is episode 14 of this title",
+          },
+        ],
+        rejectedProviderFileIds: [],
+        confidence: "high",
+        reason: "single unparsed file maps to E14",
+      },
+    });
+
+    const result = await runType3Monitoring({
+      title,
+      season,
+      episodes: initialEpisodesFor(season, existingFiles),
+      keyword: "翘楚 4K",
+      storageParentDirectoryId: "library_root",
+      resourceProvider: new FakeResourceProvider({ keywordResults: {} }),
+      storage,
+      agents,
+    });
+
+    expect(planCalls).toBe(0);
+    expect(result.status).toBe("succeeded");
+    expect(result.notification.kind).toBe("already_current");
+    const files = await storage.listVideoFiles(season.storageDirectoryId);
+    const rescued = files.find((file) => file.id === "weird_e14");
+    expect(rescued).toMatchObject({ episodeCode: "S01E14", name: "翘楚.S01E14.mkv" });
+    expect(result.auditEvents.map((event) => event.type)).toContain("unparsed_file_rescued");
+  });
+
+  it("keeps unconfirmed unparsed files untouched, surfaces a warning, and acquires honestly", async () => {
+    const { title, season } = qiaochuFixture();
+    const existingFiles = obtainedFiles(13, season.storageDirectoryId);
+    const storage = new FakeStorageExecutor({
+      directories: { [season.storageDirectoryId]: existingFiles },
+      unparsedFiles: {
+        [season.storageDirectoryId]: [
+          { providerFileId: "mystery_file", name: "random-extra-thing.mkv", sizeBytes: 700_000_000 },
+        ],
+      },
+      transferOutcomes: {
+        snapshot_1_candidate_1: {
+          status: "succeeded",
+          providerMessage: "",
+          files: [
+            {
+              id: "file_S01E14",
+              storageDirectoryId: "set_by_fake",
+              name: "翘楚.S01E14.mkv",
+              sizeBytes: 1_000_000_000,
+              episodeCode: "S01E14",
+              providerFileId: "provider_S01E14",
+            },
+          ],
+        },
+      },
+    });
+
+    const result = await runType3Monitoring({
+      title,
+      season,
+      episodes: initialEpisodesFor(season, existingFiles),
+      keyword: "翘楚 4K",
+      storageParentDirectoryId: "library_root",
+      resourceProvider: new FakeResourceProvider({
+        keywordResults: {
+          "翘楚 4K": [{ title: "翘楚 S01E14 4K", episodeHints: ["S01E14"], qualityHints: ["4K"] }],
+        },
+      }),
+      storage,
+      // default recognition: low confidence, nothing mapped
+      agents: new FakeAgentNodes(),
+    });
+
+    expect(result.status).toBe("succeeded");
+    expect(result.obtainedEpisodes).toContain("S01E14");
+    const stillUnparsed = await storage.listUnparsedVideoFiles(season.storageDirectoryId);
+    expect(stillUnparsed.map((file) => file.providerFileId)).toEqual(["mystery_file"]);
+    expect(result.auditEvents.map((event) => event.type)).toContain("unparsed_files_present");
+  });
+});
