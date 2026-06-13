@@ -14,6 +14,7 @@ import type { PackageTreeFile } from "./package-normalizer.js";
 import { episodeCodeFromFileName } from "./episode-code.js";
 import type {
   AcquisitionPlanningInput,
+  MoviePlanningInput,
   AcquisitionPlanningResult,
   AgentNodes,
   ResourceProvider,
@@ -427,6 +428,80 @@ export class FakeAgentNodes implements AgentNodes {
         candidateDispositions: [],
         confidence: "low",
         reason: "Fake planning exhausted keywords without a non-empty snapshot.",
+      },
+      snapshots,
+      trace,
+    };
+  }
+
+  async planMovieAcquisition(input: MoviePlanningInput): Promise<AcquisitionPlanningResult> {
+    const failedTitles = new Set(input.failureEvidence.map((evidence) => evidence.candidateTitle));
+    const keywords = uniqueKeywords([
+      input.initialKeyword,
+      input.title,
+      ...input.aliases,
+      `${input.title} 4K`,
+    ]);
+    const snapshots: ResourceSnapshot[] = [];
+    const searchedKeywords: string[] = [];
+    const trace: AcquisitionPlanningResult["trace"] = [
+      { type: "node_start", nodeName: "MoviePlanningAgent", schemaName: "movie_planning", maxSteps: 8 },
+    ];
+
+    for (const keyword of keywords) {
+      searchedKeywords.push(keyword);
+      trace.push({ type: "tool_call", nodeName: "MoviePlanningAgent", toolName: "searchResources", input: { keyword } });
+      let snapshot: ResourceSnapshot;
+      try {
+        snapshot = await input.searchResources({ keyword });
+      } catch (error) {
+        trace.push({
+          type: "tool_result",
+          nodeName: "MoviePlanningAgent",
+          toolName: "searchResources",
+          output: { keyword, error: errorMessage(error) },
+        });
+        continue;
+      }
+      snapshots.push(snapshot);
+      trace.push({
+        type: "tool_result",
+        nodeName: "MoviePlanningAgent",
+        toolName: "searchResources",
+        output: { snapshotId: snapshot.id, keyword: snapshot.keyword, candidateCount: snapshot.candidates.length },
+      });
+      const chosen = snapshot.candidates.find((candidate) => !failedTitles.has(candidate.title));
+      if (chosen === undefined) {
+        continue;
+      }
+      trace.push({ type: "node_finish", nodeName: "MoviePlanningAgent", schemaName: "movie_planning" });
+      return {
+        plan: {
+          node: "fake_movie_planning",
+          selectedSnapshotId: snapshot.id,
+          searchedKeywords,
+          candidateDispositions: snapshot.candidates.map((candidate) =>
+            candidate.id === chosen.id
+              ? { candidateId: candidate.id, disposition: "selected", episodes: ["S01E01"], reason: "Fake movie pick" }
+              : { candidateId: candidate.id, disposition: "rejected", episodes: [], reason: "Not the chosen movie file" },
+          ),
+          confidence: "high",
+          reason: "Fake movie planning selected a single candidate.",
+        },
+        snapshots,
+        trace,
+      };
+    }
+
+    trace.push({ type: "node_finish", nodeName: "MoviePlanningAgent", schemaName: "movie_planning" });
+    return {
+      plan: {
+        node: "fake_movie_planning",
+        selectedSnapshotId: null,
+        searchedKeywords,
+        candidateDispositions: [],
+        confidence: "low",
+        reason: "Fake movie planning found no candidate.",
       },
       snapshots,
       trace,

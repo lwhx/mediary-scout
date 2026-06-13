@@ -22,11 +22,16 @@ describe("VercelAiAgentNodes", () => {
     expect(config.providerSettings).not.toHaveProperty("apiKey");
   });
 
-  it("defines the two remaining specialist node specs", () => {
-    expect(Object.keys(AGENT_NODE_SPECS)).toEqual(["AcquisitionPlanningAgent", "PackageRecognitionAgent"]);
+  it("defines the specialist node specs", () => {
+    expect(Object.keys(AGENT_NODE_SPECS)).toEqual([
+      "AcquisitionPlanningAgent",
+      "MoviePlanningAgent",
+      "PackageRecognitionAgent",
+    ]);
     expect(AGENT_NODE_SPECS.AcquisitionPlanningAgent.system).toContain("No just-in-case");
     expect(AGENT_NODE_SPECS.AcquisitionPlanningAgent.system).toContain("EVERY candidate");
     expect(AGENT_NODE_SPECS.AcquisitionPlanningAgent.system).toContain("failureEvidence");
+    expect(AGENT_NODE_SPECS.MoviePlanningAgent.system).toContain("single video file");
     expect(AGENT_NODE_SPECS.PackageRecognitionAgent.system).toContain("multi-season");
   });
 

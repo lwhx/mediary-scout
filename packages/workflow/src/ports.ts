@@ -69,6 +69,22 @@ export interface AcquisitionPlanningResult {
 }
 
 /**
+ * Movie acquisition judgment. No seasons/episodes — the agent's job is to pick
+ * the ONE resource that is exactly this film (not a remake/sequel/same-IP
+ * different movie) as a single video at the best quality. The selected
+ * candidate is mapped to the movie anchor's single synthetic episode S01E01.
+ */
+export interface MoviePlanningInput {
+  title: string;
+  aliases: string[];
+  year: number;
+  qualityPreference: string;
+  initialKeyword: string;
+  failureEvidence: AcquisitionFailureEvidence[];
+  searchResources(input: { keyword: string }): Promise<ResourceSnapshot>;
+}
+
+/**
  * The agent boundary. One node owns the whole acquisition judgment
  * (search strategy, target matching, episode mapping, selection) through
  * read-only tools; one node maps ambiguous package files. Neither can
@@ -76,5 +92,6 @@ export interface AcquisitionPlanningResult {
  */
 export interface AgentNodes {
   planAcquisition(input: AcquisitionPlanningInput): Promise<AcquisitionPlanningResult>;
+  planMovieAcquisition(input: MoviePlanningInput): Promise<AcquisitionPlanningResult>;
   recognizePackage(input: PackageRecognitionInput): Promise<PackageRecognitionDecision>;
 }

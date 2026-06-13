@@ -16,6 +16,7 @@ import type {
   AcquisitionPlanningInput,
   AcquisitionPlanningResult,
   AgentNodes,
+  MoviePlanningInput,
 } from "./ports.js";
 
 const DEFAULT_PROVIDER_NAME = "xiaomi-mimo";
@@ -127,6 +128,66 @@ export class VercelAiAgentNodes implements AgentNodes {
     return {
       plan: {
         node: "vercel_ai_acquisition_planning",
+        selectedSnapshotId: output.selectedSnapshotId,
+        searchedKeywords: output.searchedKeywords,
+        candidateDispositions: output.candidateDispositions,
+        confidence: output.confidence as Confidence,
+        reason: output.reason,
+      },
+      snapshots,
+      trace: result.trace,
+    };
+  }
+
+  async planMovieAcquisition(input: MoviePlanningInput): Promise<AcquisitionPlanningResult> {
+    const snapshots: ResourceSnapshot[] = [];
+    const result = await runAgentNode({
+      spec: AGENT_NODE_SPECS.MoviePlanningAgent,
+      input: {
+        title: input.title,
+        aliases: input.aliases,
+        year: input.year,
+        qualityPreference: input.qualityPreference,
+        initialKeyword: input.initialKeyword,
+        failureEvidence: input.failureEvidence,
+      },
+      tools: {
+        searchResources: {
+          readOnly: true,
+          description:
+            "Search the resource provider with one keyword. Read-only. Returns the full persisted ResourceSnapshot; judge from this complete evidence. Returns {keyword, error} when the provider fails.",
+          inputSchema: AGENT_NODE_SPECS.MoviePlanningAgent.toolInputSchemas.searchResources,
+          execute: async ({ keyword }) => {
+            try {
+              const snapshot = await input.searchResources({ keyword });
+              snapshots.push(snapshot);
+              return {
+                snapshotId: snapshot.id,
+                provider: snapshot.provider,
+                keyword: snapshot.keyword,
+                candidateCount: snapshot.candidates.length,
+                candidates: snapshot.candidates.map((candidate) => ({
+                  id: candidate.id,
+                  title: candidate.title,
+                  type: candidate.type,
+                  source: candidate.source,
+                  episodeHints: candidate.episodeHints,
+                  qualityHints: candidate.qualityHints,
+                })),
+              };
+            } catch (error) {
+              return { keyword, error: error instanceof Error ? error.message : String(error) };
+            }
+          },
+        },
+      },
+      executor: this.generateStructuredOutput,
+    });
+    const output = acquisitionPlanningSchema.parse(result.output);
+
+    return {
+      plan: {
+        node: "vercel_ai_movie_planning",
         selectedSnapshotId: output.selectedSnapshotId,
         searchedKeywords: output.searchedKeywords,
         candidateDispositions: output.candidateDispositions,

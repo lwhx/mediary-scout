@@ -3,7 +3,7 @@ export type SeasonStatus = "active" | "completed";
 export type LatestAiredSource = "metadata" | "manual" | "unknown";
 export type AirStatus = "aired" | "unaired" | "unknown";
 export type MetadataStatus = "confirmed" | "provider_ahead" | "storage_only";
-export type WorkflowKind = "type1_package_init" | "type2_init" | "type3_monitor";
+export type WorkflowKind = "type1_package_init" | "type2_init" | "type3_monitor" | "movie_init";
 export type WorkflowStatus = "queued" | "running" | "succeeded" | "failed" | "partial" | "no_coverage";
 export type ResourceType = "115" | "magnet" | "manual";
 export type TransferStatus = "succeeded" | "failed" | "no_target_change";
@@ -204,6 +204,30 @@ export function episodePartsFromCode(code: string): { seasonNumber: number; epis
   return {
     seasonNumber: Number(match[1]),
     episodeNumber: Number(match[2]),
+  };
+}
+
+/**
+ * A movie persists as a degenerate single-"episode" season anchor so it reuses
+ * the whole tracked-season machinery (repository, library wall, notifications)
+ * with no parallel type system. The user never sees the anchor — only "已入库".
+ * status is `completed` (no monitoring) and there is no real airing concept.
+ */
+export function movieAnchorSeason(input: {
+  titleId: string;
+  qualityPreference: string;
+  storageDirectoryId: string;
+}): TrackedSeason {
+  return {
+    id: `${input.titleId}_movie`,
+    mediaTitleId: input.titleId,
+    seasonNumber: 1,
+    status: "completed",
+    qualityPreference: input.qualityPreference,
+    storageDirectoryId: input.storageDirectoryId,
+    totalEpisodes: 1,
+    latestAiredEpisode: 1,
+    latestAiredSource: "manual",
   };
 }
 

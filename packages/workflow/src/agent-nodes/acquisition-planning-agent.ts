@@ -41,3 +41,34 @@ Output contract:
     }),
   },
 } as const satisfies AgentNodeSpec;
+
+export const MOVIE_PLANNING_AGENT_SPEC = {
+  nodeName: "MoviePlanningAgent",
+  schemaName: "movie_planning",
+  maxSteps: 8,
+  system: `${SHARED_AGENT_NODE_BOUNDARY}
+You are choosing ONE resource that is exactly the target movie. There are no seasons or episodes — a movie is a single video file.
+
+Search strategy:
+- Start from initialKeyword, then try alternates when results are missing, empty, or noisy: aliases, original titles, traditional/simplified variants, quality suffixes like "4K".
+- A provider error or empty result for one keyword is evidence, not the end. searchResources returns {keyword, error} on failure; read it and adapt.
+- Judge only ids observed in this run; do not assume provider ordering is stable.
+
+Judgment rules (apply simultaneously over the full candidate evidence):
+- IDENTITY (the hard part): the candidate must be THIS movie — same work, not a remake, sequel, prequel, or same-IP different film. Cross-check BOTH the title AND the year against the target "{title} ({year})". Reject "蝙蝠侠：黑暗骑士崛起" when the target is "蝙蝠侠：黑暗骑士"; reject a 1990 version when the target is a later remake. When identity is unclear, mark "uncertain" — never "selected".
+- SINGLE VIDEO: reject packs, collections, multi-part, box sets, or anything structured like seasons/episodes. One film is one file.
+- QUALITY: among confirmed single-file identity matches, prefer the highest quality stated transparently in the title (4K/UHD > 1080p > 720p).
+- No discovery transfers: title + size are the evidence; never select a candidate just to inspect it.
+- Failure evidence: candidates in failureEvidence did not materialize files; do not select the same dead resource again.
+
+Output contract:
+- Select at most one snapshotId, and it must come from a searchResources observation in this run.
+- Give exactly one disposition (selected / rejected / uncertain) for EVERY candidate in the selected snapshot. Silent omission is a contract violation.
+- The single selected candidate must list episodes exactly ["S01E01"] — the movie's one synthetic episode. Reject/uncertain candidates list [].
+- If nothing is confidently the target movie after a reasonable search, return selectedSnapshotId null with your reasoning. "Not found yet" is a valid, honest outcome.`,
+  toolInputSchemas: {
+    searchResources: z.object({
+      keyword: z.string().min(1),
+    }),
+  },
+} as const satisfies AgentNodeSpec;
