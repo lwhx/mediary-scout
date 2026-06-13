@@ -1,5 +1,7 @@
 export * from "./domain.js";
 export * from "./media-classification.js";
+export * from "./movie-plan-validation.js";
+export * from "./movie-workflow.js";
 export * from "./notification-report.js";
 export * from "./season-sync.js";
 export * from "./ports.js";
