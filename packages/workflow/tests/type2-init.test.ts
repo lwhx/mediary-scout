@@ -397,6 +397,10 @@ class RecordingCandidateStorage implements StorageExecutor {
     return { deleted: [] };
   }
 
+  async removeDirectory(): Promise<{ removed: boolean }> {
+    return { removed: true };
+  }
+
   async listTree(): Promise<never[]> {
     return [];
   }

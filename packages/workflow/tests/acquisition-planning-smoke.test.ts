@@ -45,6 +45,12 @@ describe("runAcquisitionPlanningSmoke", () => {
       recognizePackage: async () => {
         throw new Error("unused");
       },
+      planMovieAcquisition: async () => {
+        throw new Error("unused");
+      },
+      selectMovieMasterFile: async () => {
+        throw new Error("unused");
+      },
     } satisfies AgentNodes;
 
     const result = await runAcquisitionPlanningSmoke({
@@ -92,6 +98,12 @@ describe("runAcquisitionPlanningSmoke", () => {
         };
       },
       recognizePackage: async () => {
+        throw new Error("unused");
+      },
+      planMovieAcquisition: async () => {
+        throw new Error("unused");
+      },
+      selectMovieMasterFile: async () => {
         throw new Error("unused");
       },
     } satisfies AgentNodes;
