@@ -1,15 +1,35 @@
 import { describe, expect, it } from "vitest";
 import {
   createProtectedStorage115Executor,
+  infoHashFromMagnet,
   Pan115ApiGuard,
   Pan115RiskControlError,
   Storage115Executor,
   type Pan115ActionResult,
   type Pan115DirectoryInfo,
   type Pan115Item,
+  type Pan115OfflineTask,
   type Pan115StorageApi,
   type ResourceCandidate,
 } from "../src/index.js";
+
+describe("infoHashFromMagnet", () => {
+  it("reads a 40-char hex btih, lowercased", () => {
+    const hex = "ABCDEF0123456789ABCDEF0123456789ABCDEF01";
+    expect(infoHashFromMagnet(`magnet:?xt=urn:btih:${hex}&dn=x`)).toBe(hex.toLowerCase());
+  });
+
+  it("decodes a 32-char base32 btih to hex so base32 magnets are cancellable", () => {
+    // 32 'A's = 20 zero bytes = 40 hex zeros; 32 '7's = 20 0xFF bytes = 40 'f's.
+    expect(infoHashFromMagnet("magnet:?xt=urn:btih:" + "A".repeat(32))).toBe("0".repeat(40));
+    expect(infoHashFromMagnet("magnet:?xt=urn:btih:" + "7".repeat(32))).toBe("f".repeat(40));
+  });
+
+  it("returns null for non-magnet or malformed links", () => {
+    expect(infoHashFromMagnet("https://115.com/s/abc")).toBeNull();
+    expect(infoHashFromMagnet("magnet:?xt=urn:btih:tooshort")).toBeNull();
+  });
+});
 
 describe("Storage115Executor", () => {
   it("refuses to create a protected live executor without a configured write scope", () => {
@@ -384,6 +404,64 @@ describe("Storage115Executor", () => {
 
     expect(attempt.status).toBe("no_target_change");
     expect(api.removedOfflineHashes).toEqual([]);
+  });
+
+  it("does not cancel an offline task 115 reports as a completed 秒传 (file listing lags)", async () => {
+    const hash = "57e6d442793c87d7f81eecc675ab4eb3b4925bd3";
+    // 115 reports the task COMPLETE (秒传), but its file has not appeared in the
+    // staging dir within the grace window. The wall-clock-only logic would have
+    // cancelled this good 秒传; reading task status prevents that.
+    const api = new FakePan115Api({
+      offlineTaskList: [
+        { infoHash: hash, name: "Movie", percentDone: 100, status: 2, statusText: "完成", url: "" },
+      ],
+    });
+    const executor = new Storage115Executor({
+      api,
+      offlineMaterializeAttempts: 2,
+      offlineMaterializePollMs: 1,
+      sleep: async () => {},
+    });
+
+    const attempt = await executor.transfer({
+      workflowRunId: "run_slow_miaochuan",
+      directoryId: "123",
+      candidate: candidateFixture({
+        type: "magnet",
+        providerPayload: { url: `magnet:?xt=urn:btih:${hash.toUpperCase()}`, rawType: "magnet" },
+      }),
+    });
+
+    expect(attempt.status).toBe("no_target_change");
+    expect(api.removedOfflineHashes).toEqual([]); // the completed 秒传 was kept
+    expect(api.listOfflineTasksCalls).toBeGreaterThan(0); // status was actually read
+  });
+
+  it("cancels an offline task that task status shows still downloading (not 秒传)", async () => {
+    const hash = "57e6d442793c87d7f81eecc675ab4eb3b4925bd3";
+    const api = new FakePan115Api({
+      offlineTaskList: [
+        { infoHash: hash, name: "Movie", percentDone: 12, status: 2, statusText: "下载中", url: "" },
+      ],
+    });
+    const executor = new Storage115Executor({
+      api,
+      offlineMaterializeAttempts: 2,
+      offlineMaterializePollMs: 1,
+      sleep: async () => {},
+    });
+
+    const attempt = await executor.transfer({
+      workflowRunId: "run_real_dl",
+      directoryId: "123",
+      candidate: candidateFixture({
+        type: "magnet",
+        providerPayload: { url: `magnet:?xt=urn:btih:${hash}`, rawType: "magnet" },
+      }),
+    });
+
+    expect(attempt.status).toBe("no_target_change");
+    expect(api.removedOfflineHashes).toEqual([hash]); // in-flight download → cancelled
   });
 
   it("rejects flattening protected directories", async () => {
@@ -779,6 +857,8 @@ class FakePan115Api implements Pan115StorageApi {
   readonly directoryInfo: Record<string, Pan115DirectoryInfo>;
   readonly receivedShares: Array<{ shareCode: string; receiveCode: string; directoryId: string }> = [];
   readonly offlineTasks: Array<{ url: string; directoryId: string }> = [];
+  readonly offlineTaskList: Pan115OfflineTask[];
+  listOfflineTasksCalls = 0;
   readonly removedOfflineHashes: string[] = [];
   readonly moves: Array<{ fileIds: string[]; targetDirectoryId: string }> = [];
   readonly deletes: Array<{ fileIds: string[] }> = [];
@@ -791,11 +871,18 @@ class FakePan115Api implements Pan115StorageApi {
     shareFiles?: Record<string, Pan115Item[]>;
     receiveShareResults?: Record<string, Pan115ActionResult>;
     directoryInfo?: Record<string, Pan115DirectoryInfo>;
+    offlineTaskList?: Pan115OfflineTask[];
   } = {}) {
     this.directories = cloneDirectories(input.directories ?? {});
     this.shareFiles = cloneDirectories(input.shareFiles ?? {});
     this.receiveShareResults = { ...(input.receiveShareResults ?? {}) };
     this.directoryInfo = { ...(input.directoryInfo ?? {}) };
+    this.offlineTaskList = [...(input.offlineTaskList ?? [])];
+  }
+
+  async listOfflineTasks(): Promise<Pan115OfflineTask[]> {
+    this.listOfflineTasksCalls += 1;
+    return [...this.offlineTaskList];
   }
 
   async createFolder(input: { name: string; parentId: string }): Promise<string> {

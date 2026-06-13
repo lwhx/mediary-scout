@@ -64,6 +64,17 @@ export interface Pan115ActionResult {
   code?: number;
 }
 
+export interface Pan115OfflineTask {
+  infoHash: string;
+  name: string;
+  /** 0–100; 0 with status "waiting"/"downloading" is a non-秒传 in-flight task. */
+  percentDone: number;
+  /** 115 status code (1=waiting, 2=downloading, 5/-1=failed, ...). */
+  status: number;
+  statusText: string;
+  url: string;
+}
+
 export interface Pan115StorageApi {
   createFolder(input: { name: string; parentId: string }): Promise<string>;
   listItems(input: { directoryId: string }): Promise<Pan115Item[]>;
@@ -75,6 +86,10 @@ export interface Pan115StorageApi {
   }): Promise<Pan115ActionResult>;
   addOfflineTask(input: { url: string; directoryId: string }): Promise<Pan115ActionResult>;
   removeOfflineTask(input: { infoHashes: string[] }): Promise<Pan115ActionResult>;
+  /** The account's current offline (cloud-download) tasks — `ac=task_lists`, a
+   *  single plain-cookie GET. Used to read whether a queued task is a completed
+   *  秒传 (don't cancel) or an in-flight real download (cancel). */
+  listOfflineTasks(input?: { page?: number }): Promise<Pan115OfflineTask[]>;
   moveItems(input: { fileIds: string[]; targetDirectoryId: string }): Promise<Pan115ActionResult>;
   deleteItems(input: { fileIds: string[] }): Promise<Pan115ActionResult>;
   renameFile(input: { fileId: string; newName: string }): Promise<Pan115ActionResult>;
@@ -364,14 +379,32 @@ export class Storage115Executor implements StorageExecutor {
     // transferStatus stays no_target_change and the workflow switches to the
     // next candidate, hunting for one that can 秒传. (115 share receives are
     // synchronous, so this only applies to offline tasks.)
+    const offlineInfoHash = isOfflineTaskCandidate(input.candidate)
+      ? infoHashFromMagnet(stringValue(input.candidate.providerPayload["url"]))
+      : null;
+    // Did 115 report the task as a COMPLETED 秒传? Then a not-yet-listed file is
+    // just a lagging directory index, NOT a failure — so we extend the grace and
+    // must not cancel it (the bug the wall-clock-only window had).
+    let offlineTaskComplete = false;
     if (action.ok && isOfflineTaskCandidate(input.candidate)) {
-      let attempts = 0;
-      while (
-        attempts < this.offlineMaterializeAttempts &&
-        !(await this.stagingTreeHasVideo(safeDirectoryId))
-      ) {
+      let remaining = this.offlineMaterializeAttempts;
+      let extendedForCompletion = false;
+      while (remaining > 0) {
+        if (await this.stagingTreeHasVideo(safeDirectoryId)) {
+          break; // file landed → 秒传 confirmed by the dir
+        }
+        if (!offlineTaskComplete && offlineInfoHash && (await this.isOfflineTaskComplete(offlineInfoHash))) {
+          offlineTaskComplete = true;
+        }
+        if (offlineTaskComplete && !extendedForCompletion) {
+          // One-time grace extension for a confirmed 秒传 whose listing is slow;
+          // a real (still-downloading) task never reaches here, so it isn't
+          // extended — keeps the 115 call budget bounded (≤ 2× attempts).
+          remaining += this.offlineMaterializeAttempts;
+          extendedForCompletion = true;
+        }
         await this.sleep(this.offlineMaterializePollMs);
-        attempts += 1;
+        remaining -= 1;
       }
     }
 
@@ -384,15 +417,19 @@ export class Storage115Executor implements StorageExecutor {
     // Non-秒传 offline task: 115 had no cached copy, so it queued a real
     // download we never wait for. Cancel it (`task_del`) to free the offline
     // quota and not leave junk tasks behind. Best-effort — never fail the
-    // transfer over cleanup. NEVER cancel an `alreadyTransferred` result
-    // ("任务已存在"): that is 115 refusing a duplicate of a PRIOR task, which may
-    // be a good download/秒传 we must not kill.
-    if (status !== "succeeded" && !action.alreadyTransferred && isOfflineTaskCandidate(input.candidate)) {
-      const infoHash = infoHashFromMagnet(stringValue(input.candidate.providerPayload["url"]));
-      if (infoHash) {
+    // transfer over cleanup. NEVER cancel: an `alreadyTransferred` result
+    // ("任务已存在", 115 refusing a duplicate of a PRIOR task), nor a task 115
+    // reports as a COMPLETED 秒传 (its file is merely slow to list).
+    if (
+      status !== "succeeded" &&
+      !action.alreadyTransferred &&
+      !offlineTaskComplete &&
+      isOfflineTaskCandidate(input.candidate)
+    ) {
+      if (offlineInfoHash) {
         try {
           await this.callApi("removeOfflineTask", () =>
-            this.api.removeOfflineTask({ infoHashes: [infoHash] }),
+            this.api.removeOfflineTask({ infoHashes: [offlineInfoHash] }),
           );
         } catch {
           // Cleanup is best-effort; the transfer outcome stands regardless.
@@ -538,6 +575,24 @@ export class Storage115Executor implements StorageExecutor {
   private async stagingTreeHasVideo(directoryId: string): Promise<boolean> {
     const tree = await this.listTree({ directoryId });
     return tree.some((file) => isVideoName(file.path, this.videoExtensions));
+  }
+
+  /**
+   * Whether 115 reports this offline task as a completed 秒传 (percentDone 100).
+   * A still-downloading or failed task is NOT complete → false, so the caller
+   * stops waiting and cancels it. Best-effort: a failed status probe returns
+   * false (treat as not-秒传) and never breaks the transfer.
+   */
+  private async isOfflineTaskComplete(infoHash: string): Promise<boolean> {
+    let tasks;
+    try {
+      tasks = await this.callApi("listOfflineTasks", () => this.api.listOfflineTasks());
+    } catch {
+      return false;
+    }
+    const wanted = infoHash.toLowerCase();
+    const task = tasks.find((entry) => entry.infoHash.toLowerCase() === wanted);
+    return task !== undefined && task.percentDone >= 100;
   }
 
   private async executeCandidateTransfer(
@@ -892,11 +947,43 @@ function isOfflineTaskCandidate(candidate: ResourceCandidate): boolean {
   return isOfflineTaskUrl(stringValue(candidate.providerPayload["url"]));
 }
 
-/** The btih info_hash from a magnet uri — 115 keys offline tasks by it, so it is
- *  what `task_del` needs to cancel one. Null for non-magnet/base32-only links. */
-function infoHashFromMagnet(url: string): string | null {
-  const match = /xt=urn:btih:([A-Fa-f0-9]{40})/.exec(url);
-  return match?.[1] ? match[1].toLowerCase() : null;
+const BASE32_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+
+/** Decode a 32-char RFC4648 base32 btih into its 40-char lowercase hex form
+ *  (160 bits → 20 bytes). Null if any char is outside the alphabet. */
+function base32InfoHashToHex(base32: string): string | null {
+  let bits = "";
+  for (const char of base32.toUpperCase()) {
+    const index = BASE32_ALPHABET.indexOf(char);
+    if (index < 0) {
+      return null;
+    }
+    bits += index.toString(2).padStart(5, "0");
+  }
+  let hex = "";
+  for (let offset = 0; offset + 8 <= bits.length; offset += 8) {
+    hex += parseInt(bits.slice(offset, offset + 8), 2).toString(16).padStart(2, "0");
+  }
+  return hex;
+}
+
+/** The btih info_hash (lowercase hex) from a magnet uri — 115 keys offline tasks
+ *  by it, so it is what `task_del` needs to cancel one and `task_lists` to look
+ *  one up. Accepts both the 40-char hex and the 32-char base32 btih encodings.
+ *  Null only for non-magnet / malformed links. */
+export function infoHashFromMagnet(url: string): string | null {
+  const match = /xt=urn:btih:([A-Za-z0-9]+)/.exec(url);
+  const raw = match?.[1];
+  if (!raw) {
+    return null;
+  }
+  if (/^[A-Fa-f0-9]{40}$/.test(raw)) {
+    return raw.toLowerCase();
+  }
+  if (/^[A-Za-z2-7]{32}$/.test(raw)) {
+    return base32InfoHashToHex(raw)?.toLowerCase() ?? null;
+  }
+  return null;
 }
 
 function transferMessage(

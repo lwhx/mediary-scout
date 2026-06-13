@@ -3,19 +3,11 @@ import type {
   Pan115ActionResult,
   Pan115DirectoryInfo,
   Pan115Item,
+  Pan115OfflineTask,
   Pan115StorageApi,
 } from "./storage-115-executor.js";
 
-export interface Pan115OfflineTask {
-  infoHash: string;
-  name: string;
-  /** 0–100; 0 with status "waiting"/"downloading" is a non-秒传 in-flight task. */
-  percentDone: number;
-  /** 115 status code (1=waiting, 2=downloading, 5/-1=failed, ...). */
-  status: number;
-  statusText: string;
-  url: string;
-}
+export type { Pan115OfflineTask };
 
 const PAN115_WEBAPI_BASE_URL = "https://webapi.115.com";
 const PAN115_CDN_WEBAPI_BASE_URL = "https://115cdn.com/webapi";
