@@ -24,6 +24,10 @@ export interface TaskSandboxOptions {
   stagingDirectoryId?: string;
   /** The scoped Season N directory this task may move target files into. */
   targetSeasonDirectoryId?: string;
+  /** What this task must cover: episode codes for TV, or e.g. ["MOVIE"] for a
+   *  film. Coverage is met when every token has a markObtained-confirmed entry.
+   *  Drives the §3 "no more side effects once satisfied" gate. */
+  need?: string[];
 }
 
 export interface SearchToolResult {
@@ -48,9 +52,11 @@ export class TaskSandbox {
   private readonly storage: StorageV2 | undefined;
   private readonly stagingDirectoryId: string | undefined;
   private readonly targetSeasonDirectoryId: string | undefined;
+  private readonly need: readonly string[];
   private readonly seenKeywords = new Set<string>();
   private readonly snapshotByKeyword = new Map<string, ResourceSnapshotV2>();
   private readonly observedSnapshots = new Map<string, ResourceSnapshotV2>();
+  private readonly obtainedCodes = new Set<string>();
 
   constructor(options: TaskSandboxOptions) {
     this.provider = options.provider;
@@ -58,6 +64,17 @@ export class TaskSandbox {
     this.storage = options.storage;
     this.stagingDirectoryId = options.stagingDirectoryId;
     this.targetSeasonDirectoryId = options.targetSeasonDirectoryId;
+    this.need = options.need ?? [];
+  }
+
+  /** Whether every needed token has been confirmed obtained — the gate that
+   *  stops the agent from acquiring past the point of coverage (莉可丽丝 scar). */
+  isCoverageMet(): boolean {
+    return this.need.length > 0 && this.need.every((token) => this.obtainedCodes.has(token));
+  }
+
+  private missingNeed(): string[] {
+    return this.need.filter((token) => !this.obtainedCodes.has(token));
   }
 
   /** Search one keyword. Repeats are deduped (no extra provider hit); distinct
@@ -127,6 +144,11 @@ export class TaskSandbox {
   async transferCandidate(input: { snapshotId: string; candidateId: string }): Promise<TransferToolResult> {
     if (!this.storage || !this.stagingDirectoryId) {
       throw new Error("SANDBOX: no storage/staging handle configured for transfers");
+    }
+    if (this.isCoverageMet()) {
+      throw new Error(
+        `SANDBOX_COVERAGE_ALREADY_MET: every needed item (${this.need.join(",")}) is obtained; no further transfers`,
+      );
     }
     const snapshot = this.observedSnapshots.get(input.snapshotId);
     if (!snapshot) {
@@ -211,6 +233,9 @@ export class TaskSandbox {
         `SANDBOX_MARK_FILE_NOT_PRESENT: ${missing.map((e) => `${e.code}->${e.fileId}`).join(",")}`,
       );
     }
+    for (const episode of input.episodes) {
+      this.obtainedCodes.add(episode.code);
+    }
     return { confirmed: input.episodes };
   }
 
@@ -231,5 +256,27 @@ export class TaskSandbox {
     }
     const { removed } = await this.storage.removeDirectory({ directoryId: input.directoryId });
     return { removed, staging: await this.storage.listTree({ directoryId: this.stagingDirectoryId }) };
+  }
+
+  /** The agent declares it is done. Returns the honest coverage picture from the
+   *  obtained marks — the workflow decides what to persist. */
+  async finish(): Promise<{ coverageMet: boolean; obtained: string[]; missing: string[] }> {
+    return {
+      coverageMet: this.isCoverageMet(),
+      obtained: this.need.filter((token) => this.obtainedCodes.has(token)),
+      missing: this.missingNeed(),
+    };
+  }
+
+  /** The agent honestly reports it cannot cover the target. This is only valid
+   *  when a real provider search actually ran (§9): reporting no-coverage without
+   *  ever searching is an infrastructure failure, not an honest result. */
+  async reportNoCoverage(reason: string): Promise<{ reason: string; searchesPerformed: number }> {
+    if (this.seenKeywords.size === 0) {
+      throw new Error(
+        "SANDBOX_NO_PROVIDER_EVIDENCE: cannot report no-coverage before any real search ran (§9 infrastructure failure)",
+      );
+    }
+    return { reason, searchesPerformed: this.seenKeywords.size };
   }
 }
