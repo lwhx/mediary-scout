@@ -12,6 +12,7 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
+import { loadPan115Cookie } from "./_lib/pan115-cookie.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 for (const line of readFileSync(path.join(repoRoot, ".env"), "utf8").split("\n")) {
@@ -36,18 +37,13 @@ if (TEST_ROOT === PROD) {
   process.exit(1);
 }
 
-// The live 115 cookie lives in the dev DB (app_settings.pan115.cookie), set via
-// QR login; the .env value is a stale bootstrap fallback. Hydrate from the DB,
-// exactly like the runtime's hydratePan115CookieFromDb().
-const dbPath = path.join(repoRoot, ".media-track-live-series.sqlite");
+// The live 115 cookie lives in Postgres (app_settings.pan115.cookie), set via
+// QR login; the .env value is a stale bootstrap fallback. Hydrate from Postgres,
+// exactly like the runtime does. Tolerant: fall back to the .env cookie if absent.
 try {
-  const { DatabaseSync } = await import("node:sqlite");
-  const db = new DatabaseSync(dbPath);
-  const row = db.prepare("SELECT value FROM app_settings WHERE key = ?").get("pan115.cookie");
-  db.close();
-  if (row && row.value) process.env.PAN115_COOKIE = String(row.value);
+  await loadPan115Cookie();
 } catch (error) {
-  console.error(`(could not hydrate cookie from ${dbPath}: ${String(error)}; using .env)`);
+  console.error(`(could not hydrate cookie from Postgres: ${String(error)}; using .env)`);
 }
 
 const apply = process.argv.includes("--apply");

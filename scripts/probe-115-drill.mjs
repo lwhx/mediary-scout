@@ -3,14 +3,11 @@
 // print the breadcrumb 115 returns, to verify /files carries the FULL ancestor
 // chain for deep directories. No writes, no recursive video collection.
 //   node scripts/probe-115-drill.mjs <cid>
-import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
+import { loadPan115Cookie } from "./_lib/pan115-cookie.mjs";
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const db = new DatabaseSync(path.join(repoRoot, ".media-track-live-series.sqlite"));
-const cookie = String(db.prepare("SELECT value FROM app_settings WHERE key = ?").get("pan115.cookie").value);
-db.close();
+const cookie = await loadPan115Cookie();
 const { Pan115CookieClient } = await import(path.join(repoRoot, "packages/workflow/dist/index.js"));
 const client = new Pan115CookieClient({ cookie, listLimit: 5000 });
 let cid = process.argv[2];
