@@ -4,8 +4,8 @@
  * This is the original clawd-media-track skill (SKILL.md + references/) LOCALIZED
  * to the V2 sandbox: every mechanic is re-expressed in the sandbox tools
  * (searchResources / transferCandidate / inspectStaging / inspectTargetDir /
- * moveToSeason / deleteFiles / markObtained / flattenPack / finish /
- * reportNoCoverage) and scoped handles — never raw pan115 calls, raw cids,
+ * moveToSeason / deleteFiles / markObtained / flattenMovie / discardStaging /
+ * finish / reportNoCoverage) and scoped handles — never raw pan115 calls, raw cids,
  * manual directory creation, or the original Mac/openclaw runtime. The depth and
  * the hard-won lessons are kept; the machinery is translated.
  *

@@ -73,11 +73,6 @@ export function buildSandboxToolSet(sandbox: TaskSandbox, options: { movie?: boo
       inputSchema: z.object({}),
       execute: () => asEvidence(() => sandbox.inspectStaging()),
     },
-    inspectStagingDirs: {
-      description: "Read-only: the wrapper subdirectories currently in staging — the handles you pass to flattenPack.",
-      inputSchema: z.object({}),
-      execute: () => asEvidence(() => sandbox.inspectStagingDirs()),
-    },
     inspectTargetDir: {
       description:
         "Read-only ground truth for what has landed. Pass `season` to see that season's directory (so you know what it already holds before moving/deduping); omit it to see all target seasons at once. Multi-season tasks: check each season here.",
@@ -110,12 +105,6 @@ export function buildSandboxToolSet(sandbox: TaskSandbox, options: { movie?: boo
       }),
       execute: (args: { directory: "staging" | "season"; season?: number; fileIds: string[] }) =>
         asEvidence(() => sandbox.deleteFiles(args)),
-    },
-    flattenPack: {
-      description:
-        "After extracting target files into the Season dir, remove the now-residual wrapper directory. Only a subdir currently inside this task's staging is allowed.",
-      inputSchema: z.object({ directoryId: z.string() }),
-      execute: (args: { directoryId: string }) => asEvidence(() => sandbox.flattenPack(args)),
     },
     flattenMovie: {
       description:

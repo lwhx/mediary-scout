@@ -247,7 +247,7 @@ describe("§6b acceptance — the 12 invariants", () => {
     expect(after.find((f) => f.path === "Show - 01.mkv")!.sizeBytes).toBe(999_999);
   });
 
-  it("#12 flatten: targets land flat in Season N, the wrapper shell is removed, no (1) pollution, one transfer", async () => {
+  it("#12 flatten: targets land flat in Season N, the residual shell is wiped by discardStaging, no (1) pollution, one transfer", async () => {
     const need = episodes(3);
     const { sandbox } = await makeSandbox({
       results: { show: [candidate("pack"), candidate("other")] },
@@ -260,14 +260,14 @@ describe("§6b acceptance — the 12 invariants", () => {
     // Files are now flat in Season 1 (extracted out of the wrapper).
     expect(moved.seasons[1]!.every((f) => !f.path.includes("/"))).toBe(true);
     expect(moved.seasons[1]!.some((f) => /\(1\)/.test(f.path))).toBe(false);
-    // Peel off the now-residual wrapper dir.
-    const wrapper = (await sandbox.inspectStagingDirs())[0]!;
-    const flat = await sandbox.flattenPack({ directoryId: wrapper.id });
-    expect(flat.staging).toHaveLength(0); // staging clean, no leftover shell
     // One pack sufficed — further transfers refused once marked.
     await sandbox.markObtained({ codes: need });
     await expect(
       sandbox.transferCandidate({ snapshotId: search.snapshot!.id, candidateId: "other" }),
     ).rejects.toThrow(/COVERAGE_ALREADY_MET/);
+    // The now-residual wrapper shell is wiped wholesale by discardStaging (new model:
+    // no per-wrapper flattenPack — moveToSeason flattens, discardStaging clears leftovers).
+    const discarded = await sandbox.discardStaging();
+    expect(discarded.removed.length).toBeGreaterThan(0); // the residual wrapper shell was removed
   });
 });
