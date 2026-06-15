@@ -120,6 +120,9 @@ The move tool is a BATCH plan, not a per-season call. Use it EXACTLY like this:
 3. VERIFY the returned {seasons, staging}: each returned season must hold exactly its missing episodes (+ their subtitles), flat. If a file is misplaced or missing, call moveToSeason again to fix it — moves are cheap (NOT transfer-budget), so distribute-then-verify; do not agonize over a perfect first call.
 4. Only once the seasons verify correct: dedup (keep-larger) → markObtained(codes) → discardStaging.
 
+## Messy real packs (lived)
+A single "全X集" pack often has INCONSISTENT, watermarked filenames and MIXED quality — e.g. a real 隐秘的角落 全12集 pack held 第1集–第6集 in proper 蓝光1080P (400MB–1GB) but 尝鲜版07–尝鲜版12End in low-quality preview (~150MB), all sprinkled with a 【site.com】 watermark. You map each to its episode by READING the name ("第3集"=E03, "尝鲜版09"=E09, an "End"/"完" marker = the finale) — no regex, no parser. Keep the ORIGINAL names (never rename). If covering the missing episodes only takes proper-quality files, take those; if the only file for a missing episode is a preview/尝鲜版, take it (coverage now, quality upgrades on a later patrol). When two files cover the same episode, dedup keep-larger.
+
 ## Coverage honesty
 Only currently-aired, genuinely-missing episodes are obtainable. Unaired future episodes of the latest ongoing season are NOT missing — leave them; the daily patrol gets them when they air. A truly-missing episode with no covering resource is an honest gap — leave it for the next patrol; never fabricate coverage.
 
