@@ -1,11 +1,11 @@
 import type {
+  PackageTreeFile,
   ResourceCandidate,
   TransferAttempt,
   TransferStatus,
   VerifiedFile,
 } from "./domain.js";
 import { episodeCodeFromFileName } from "./episode-code.js";
-import type { PackageTreeFile } from "./package-normalizer.js";
 import type { StorageExecutor, UnparsedVideoFile } from "./ports.js";
 
 /**

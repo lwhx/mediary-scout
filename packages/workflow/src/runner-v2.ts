@@ -1,13 +1,18 @@
 import type { LanguageModel } from "ai";
-import type { EpisodeState, MediaTitle, TrackedSeason, WorkflowKind } from "./domain.js";
+import type {
+  AcquisitionSeasonScope,
+  EpisodeState,
+  MediaTitle,
+  MovieWorkflowResult,
+  TrackedSeason,
+  WorkflowKind,
+  WorkflowRunMetadata,
+} from "./domain.js";
 import { runTvAcquisitionV2 } from "./acquisition-v2/run-tv-v2.js";
 import type { BridgedV2Result } from "./acquisition-v2/workflow-v2-bridge.js";
 import { runMovieAcquisitionV2 } from "./movie-workflow-v2.js";
-import type { MovieWorkflowResult } from "./movie-workflow.js";
 import type { ResourceProvider, StorageExecutor } from "./ports.js";
 import type { WorkflowRepository } from "./repository.js";
-import type { WorkflowRunMetadata } from "./runner.js";
-import type { AcquisitionSeasonScope } from "./workflow.js";
 
 /**
  * Phase 7d — production persist wrappers on the V2 engine. These mirror the old

@@ -6,13 +6,13 @@ import {
   type AuditEvent,
   type EpisodeState,
   type MediaTitle,
+  type MovieWorkflowResult,
   type NotificationEvent,
   type ResourceSnapshot,
   type TrackedSeason,
   type TransferAttempt,
   type WorkflowStatus,
 } from "./domain.js";
-import type { MovieWorkflowResult } from "./movie-workflow.js";
 import { buildMovieReport, formatReportPushText } from "./notification-report.js";
 import type { ResourceProvider, StorageExecutor } from "./ports.js";
 import { runAcquisitionV2 } from "./acquisition-v2/orchestrator.js";

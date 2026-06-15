@@ -305,3 +305,46 @@ export function reconcileVerifiedFiles(input: {
     return aParts.seasonNumber - bParts.seasonNumber || aParts.episodeNumber - bParts.episodeNumber;
   });
 }
+
+/**
+ * Per-season acquisition scope (which seasons, and how much of each, are in
+ * play for a series/title-level acquisition). Relocated from the retired
+ * pre-V2 `workflow.ts`; consumed by the V2 runner, queue commands, and worker.
+ */
+export interface AcquisitionSeasonScope {
+  seasonNumber: number;
+  totalEpisodes: number;
+  latestAiredEpisode: number;
+}
+
+/** A file in a (recursively listed) provider package tree: path + handle + size. */
+export interface PackageTreeFile {
+  path: string;
+  providerFileId: string;
+  sizeBytes: number;
+}
+
+/** Identity + lifecycle timestamps a runner threads through a persisted workflow run. */
+export interface WorkflowRunMetadata {
+  id: string;
+  startedAt: string;
+  finishedAt: string | null;
+}
+
+/**
+ * Facts produced by a movie acquisition run. Relocated from the retired
+ * pre-V2 `movie-workflow.ts`; the V2 movie path (`movie-workflow-v2.ts`,
+ * `runner-v2.ts`) emits exactly this shape so runner/web/UI are unchanged.
+ */
+export interface MovieWorkflowResult {
+  status: WorkflowStatus;
+  title: MediaTitle;
+  season: TrackedSeason;
+  episodes: EpisodeState[];
+  resourceSnapshots: ResourceSnapshot[];
+  transferAttempts: TransferAttempt[];
+  decisions: AgentDecision[];
+  notification: NotificationEvent;
+  notifications: NotificationEvent[];
+  auditEvents: AuditEvent[];
+}

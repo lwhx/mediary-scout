@@ -2,8 +2,7 @@ import { describe, expect, it } from "vitest";
 import { RealStorageV2 } from "../src/acquisition-v2/real-storage-adapter.js";
 import { CandidateRegistry } from "../src/acquisition-v2/candidate-registry.js";
 import type { StorageExecutor, UnparsedVideoFile } from "../src/ports.js";
-import type { ResourceCandidate, TransferAttempt, VerifiedFile } from "../src/domain.js";
-import type { PackageTreeFile } from "../src/package-normalizer.js";
+import type { PackageTreeFile, ResourceCandidate, TransferAttempt, VerifiedFile } from "../src/domain.js";
 
 function candidate(id: string): ResourceCandidate {
   return {

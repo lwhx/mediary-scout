@@ -1,5 +1,12 @@
 import type { LanguageModel } from "ai";
-import type { EpisodeState, MediaTitle, MediaType, TrackedSeason, WorkflowStatus } from "./domain.js";
+import type {
+  AcquisitionSeasonScope,
+  EpisodeState,
+  MediaTitle,
+  MediaType,
+  TrackedSeason,
+  WorkflowStatus,
+} from "./domain.js";
 import type { ResourceProvider, StorageExecutor } from "./ports.js";
 import type { WorkflowRepository } from "./repository.js";
 import {
@@ -9,7 +16,6 @@ import {
   runType3MonitoringV2AndPersist,
 } from "./runner-v2.js";
 import { syncSeasonAgainstMetadata } from "./season-sync.js";
-import type { AcquisitionSeasonScope } from "./workflow.js";
 
 /**
  * Pick the 115 landing parent for a title. Anime lands under its own parent
