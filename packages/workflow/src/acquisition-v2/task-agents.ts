@@ -44,7 +44,7 @@ const LOOP_GUIDANCE = `Your loop (you drive it; the system only orchestrates the
 
 Hard-won rules:
 - Multi-resource coverage is fine; UNVERIFIED mechanical multi-resource execution is the disaster (the 莉可丽丝 mess). After each transfer, re-read what actually landed and what is still missing before deciding whether you even need another resource — a pack you thought covered 1-8 may have covered 1-13, in which case STOP.
-- A foreign/different work bundled into a pack (e.g. El Camino inside a Breaking Bad pack) is ISOLATED for review — never auto-moved, never auto-mapped to an episode.
+- A foreign / different work bundled into a pack (e.g. El Camino inside a Breaking Bad pack) is NEVER moved into a season and NEVER mapped to an episode — leave it in staging and discardStaging wipes it with the rest. Do NOT isolate it for separate review or hand-classify it.
 - Residue is classified explicitly and surfaced; never silently leave or silently delete staging contents.`;
 
 export interface TaskAgentPromptOptions {

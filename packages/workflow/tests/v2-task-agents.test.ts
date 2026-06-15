@@ -59,7 +59,7 @@ describe("TV/anime system prompt carries the 字字泣血 invariants", () => {
     [/re-?read|read back|forced reread|after (each|every) (write|transfer)/i, "force reread after writes"],
     [/keep the larger|larger file|保大|keep-larger/i, "dedup keep-larger"],
     [/flatten|wrapper (directory|dir)|peel/i, "flatten wrapper dir"],
-    [/foreign work|different work|isolate|never (auto-?)?map/i, "isolate foreign works, never auto-map"],
+    [/(foreign|different work)[^.]*(never|discard|wipe)|discardStaging wipes/i, "foreign work → discarded with staging, never mapped (NOT isolated for review)"],
     [/LAST (action|step)|never mark before|in place|only after/i, "mark is the LAST step, only after files are placed"],
     [/stop|no (more|further).*(transfer|side effect)|once cover/i, "stop once coverage met"],
     [/do not rename|never rename|keep.*original name/i, "no renaming"],
