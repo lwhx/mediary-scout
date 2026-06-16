@@ -36,6 +36,7 @@ export interface RunAcquisitionV2WorkflowRequest {
   searchBudget?: number;
   maxSteps?: number;
   preferredLanguage?: string;
+  searchHints?: string;
   deadLinkStore?: DeadLinkStore;
 }
 
@@ -105,6 +106,7 @@ export async function runAcquisitionV2Workflow(
     ...(request.searchBudget === undefined ? {} : { searchBudget: request.searchBudget }),
     ...(request.maxSteps === undefined ? {} : { maxSteps: request.maxSteps }),
     ...(request.preferredLanguage === undefined ? {} : { preferredLanguage: request.preferredLanguage }),
+    ...(request.searchHints === undefined ? {} : { searchHints: request.searchHints }),
     ...(request.deadLinkStore ? { deadLinkStore: request.deadLinkStore } : {}),
   });
 

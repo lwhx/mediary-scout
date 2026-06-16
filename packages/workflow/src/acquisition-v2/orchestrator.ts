@@ -44,6 +44,8 @@ export interface RunAcquisitionV2Request {
   searchBudget?: number;
   maxSteps?: number;
   preferredLanguage?: string;
+  /** This title's per-media-type PanSou keyword recipe, injected into the prompt. */
+  searchHints?: string;
   /** Filters known-dead candidates from search results before the agent sees them,
    *  and records newly-proven-dead links from failed transfers (#15). */
   deadLinkStore?: DeadLinkStore;
@@ -95,6 +97,7 @@ export async function runAcquisitionV2(request: RunAcquisitionV2Request): Promis
     model: request.model,
     ...(request.maxSteps === undefined ? {} : { maxSteps: request.maxSteps }),
     ...(request.preferredLanguage === undefined ? {} : { preferredLanguage: request.preferredLanguage }),
+    ...(request.searchHints === undefined ? {} : { searchHints: request.searchHints }),
   };
 
   const result =

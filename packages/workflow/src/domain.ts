@@ -27,6 +27,10 @@ export interface MediaTitle {
   originalTitle: string;
   year: number;
   aliases: string[];
+  /** TMDB origin_country (e.g. ["JP"], ["CN"]) — drives the per-media-type search
+   *  recipe (searchProfile). Set for tv/anime; absent for movies (movie search is
+   *  origin-independent) and for demo titles. */
+  originCountries?: string[];
   /** TMDB release date (YYYY-MM-DD) for a movie — the air-time gate for reserve:
    *  an unreleased film (date in the future) is reserved, not acquired, until it
    *  releases. Absent/null for TV and for movies TMDB has no date for. */

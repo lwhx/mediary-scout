@@ -17,6 +17,7 @@ import { buildMovieReport, dominantQualityFromTransfer, formatReportPushText } f
 import type { ResourceProvider, StorageExecutor } from "./ports.js";
 import type { DeadLinkStore } from "./acquisition-v2/dead-links.js";
 import { runAcquisitionV2 } from "./acquisition-v2/orchestrator.js";
+import { getSearchRecipe } from "./acquisition-v2/search-profile.js";
 
 function defaultNowIso(): string {
   return new Date().toISOString();
@@ -71,6 +72,7 @@ export async function runMovieAcquisitionV2(
     },
     stagingDirectoryId: movieDirectoryId,
     targetMovieDirectoryId: movieDirectoryId,
+    searchHints: getSearchRecipe("movie"), // movie search is origin-independent
     ...(request.searchBudget === undefined ? {} : { searchBudget: request.searchBudget }),
     ...(request.maxSteps === undefined ? {} : { maxSteps: request.maxSteps }),
     ...(request.preferredLanguage === undefined ? {} : { preferredLanguage: request.preferredLanguage }),

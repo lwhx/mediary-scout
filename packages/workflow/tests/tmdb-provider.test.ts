@@ -73,6 +73,7 @@ describe("TmdbMetadataProvider", () => {
         originalTitle: "翘楚",
         year: 2026,
         aliases: [],
+        originCountries: [],
         posterPath: "/qiaochu-poster.jpg",
         backdropPath: "/qiaochu-backdrop.jpg",
         overview: "一部很好看的剧。",

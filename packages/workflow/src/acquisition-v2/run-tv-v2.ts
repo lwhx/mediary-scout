@@ -9,6 +9,7 @@ import {
 } from "./workflow-v2-bridge.js";
 import type { DeadLinkStore } from "./dead-links.js";
 import { runAcquisitionV2Workflow } from "./workflow-v2.js";
+import { getSearchRecipe, searchProfile } from "./search-profile.js";
 
 function defaultNowIso(): string {
   return new Date().toISOString();
@@ -61,6 +62,9 @@ export async function runTvAcquisitionV2(request: RunTvAcquisitionV2Request): Pr
       latestAiredEpisode: season.latestAiredEpisode,
     })),
     qualityPreference: request.seasons[0]!.qualityPreference,
+    searchHints: getSearchRecipe(
+      searchProfile({ type: request.title.type, originCountries: request.title.originCountries ?? [] }),
+    ),
     ...(request.priorObtained === undefined ? {} : { priorObtained: request.priorObtained }),
     ...(request.searchBudget === undefined ? {} : { searchBudget: request.searchBudget }),
     ...(request.maxSteps === undefined ? {} : { maxSteps: request.maxSteps }),
