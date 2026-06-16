@@ -66,7 +66,7 @@ try {
   const targetKey = deadLinkKey(String(registry.get(target.id).providerPayload.url));
   console.log(`  chosen candidate ${target.id} → key ${JSON.stringify(targetKey.key)} (${targetKey.kind})`);
 
-  await repo.recordDeadLink({ key: targetKey.key, kind: targetKey.kind, reason: "live-verify (a) synthetic" });
+  await repo.recordDeadLink({ key: targetKey.key, kind: targetKey.kind, reason: "live-verify (a) synthetic", permanent: true });
   recordedForCleanup.push(targetKey.key);
 
   // Fresh registry/provider so the snapshot dedup cache doesn't mask the re-filter.

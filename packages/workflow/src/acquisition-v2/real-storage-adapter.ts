@@ -66,7 +66,15 @@ export class RealStorageV2 implements StorageV2 {
     if (reason === null) {
       return;
     }
-    await this.deadLinkStore.recordDeadLink({ key: identity.key, kind: identity.kind, reason });
+    // A 115 share that fails loud is gone for good (permanent). A magnet is keyed
+    // by infohash, whose deadness is time-variable (115 may cache it later, a clean
+    // magnet for the same hash may appear) — so it is SOFT (TTL), never permanent.
+    await this.deadLinkStore.recordDeadLink({
+      key: identity.key,
+      kind: identity.kind,
+      reason,
+      permanent: identity.kind === "pan115",
+    });
   }
 
   async createDirectory(input: { name: string; parentId: string }): Promise<string> {

@@ -75,11 +75,27 @@ describe("WorkflowRepository dead-link store", () => {
     const repo = new InMemoryWorkflowRepository();
     expect(await repo.listDeadLinkKeys()).toEqual([]);
 
-    await repo.recordDeadLink({ key: "115:sww96353nl6", kind: "pan115", reason: "链接已过期" });
-    await repo.recordDeadLink({ key: "magnet:edef9b0f", kind: "magnet", reason: "no 秒传" });
+    await repo.recordDeadLink({ key: "115:sww96353nl6", kind: "pan115", reason: "链接已过期", permanent: true });
+    await repo.recordDeadLink({ key: "magnet:edef9b0f", kind: "magnet", reason: "no 秒传", permanent: false });
     // re-recording the same key is a no-op (idempotent), not a duplicate
-    await repo.recordDeadLink({ key: "115:sww96353nl6", kind: "pan115", reason: "再次过期" });
+    await repo.recordDeadLink({ key: "115:sww96353nl6", kind: "pan115", reason: "再次过期", permanent: true });
 
     expect(new Set(await repo.listDeadLinkKeys())).toEqual(new Set(["115:sww96353nl6", "magnet:edef9b0f"]));
+  });
+
+  it("a SOFT (TTL) dead-link expires; a PERMANENT one never does", async () => {
+    const repo = new InMemoryWorkflowRepository();
+    const t0 = "2026-06-16T00:00:00.000Z";
+    // a permanent 115-share death + a soft (TTL) magnet no-秒传
+    await repo.recordDeadLink({ key: "115:gone", kind: "pan115", reason: "分享已取消", permanent: true, now: t0 });
+    await repo.recordDeadLink({ key: "magnet:nocache", kind: "magnet", reason: "no 秒传", permanent: false, now: t0 });
+
+    // within the TTL window → both filtered
+    expect(new Set(await repo.listDeadLinkKeys({ now: "2026-06-18T00:00:00.000Z" }))).toEqual(
+      new Set(["115:gone", "magnet:nocache"]),
+    );
+    // well past the TTL (e.g. +30 days) → the soft magnet link RESURRECTS (allowed
+    // to retry — 115 may have cached it by now); the permanent share stays dead
+    expect(await repo.listDeadLinkKeys({ now: "2026-07-16T00:00:00.000Z" })).toEqual(["115:gone"]);
   });
 });

@@ -323,11 +323,13 @@ export class Storage115Executor implements StorageExecutor {
     this.videoExtensions = new Set(
       (options.videoExtensions ?? DEFAULT_VIDEO_EXTENSIONS).map((extension) => extension.toLowerCase()),
     );
-    // A 秒传 hit (115 already has the resource cached) reflects in the target
-    // dir within a second or two. This window only confirms that — it is NOT a
-    // wait for an actual offline download. If nothing lands in this short span,
-    // 115 doesn't have the resource cached and the caller switches candidates.
-    this.offlineMaterializeAttempts = options.offlineMaterializeAttempts ?? 2;
+    // A 秒传 hit (115 already has the resource cached) reflects in the target dir
+    // within a few seconds. This window only confirms that — it is NOT a wait for
+    // an actual offline download. A magnet survey on the real test root measured
+    // live 秒传s landing at up to ~4.3s, so the base window must reach ~8s (4×2s)
+    // or ~20% of good magnets would be mis-judged dead. If nothing lands in this
+    // span, 115 has no cached copy and the caller switches candidates.
+    this.offlineMaterializeAttempts = options.offlineMaterializeAttempts ?? 4;
     this.offlineMaterializePollMs = options.offlineMaterializePollMs ?? 2000;
     this.sleep = options.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
   }

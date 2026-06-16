@@ -10,6 +10,7 @@ import type {
   WorkflowRun,
   WorkflowStatus,
 } from "./domain.js";
+import { MAGNET_DEAD_LINK_TTL_MS } from "./acquisition-v2/dead-links.js";
 import type { DeadLink, DeadLinkStore } from "./acquisition-v2/dead-links.js";
 
 export interface PersistWorkflowRunSnapshotInput {
@@ -111,7 +112,13 @@ export class InMemoryWorkflowRepository implements WorkflowRepository {
     this.settings.set(key, value);
   }
 
-  async recordDeadLink(input: { key: string; kind: DeadLink["kind"]; reason: string; now?: string }): Promise<void> {
+  async recordDeadLink(input: {
+    key: string;
+    kind: DeadLink["kind"];
+    reason: string;
+    permanent: boolean;
+    now?: string;
+  }): Promise<void> {
     // Idempotent: keep the first record (when it was first proven dead).
     if (this.deadLinks.has(input.key)) {
       return;
@@ -120,12 +127,16 @@ export class InMemoryWorkflowRepository implements WorkflowRepository {
       key: input.key,
       kind: input.kind,
       reason: input.reason,
+      permanent: input.permanent,
       recordedAt: input.now ?? new Date().toISOString(),
     });
   }
 
-  async listDeadLinkKeys(): Promise<string[]> {
-    return [...this.deadLinks.keys()];
+  async listDeadLinkKeys(options?: { now?: string }): Promise<string[]> {
+    const cutoff = new Date(new Date(options?.now ?? new Date().toISOString()).getTime() - MAGNET_DEAD_LINK_TTL_MS).toISOString();
+    return [...this.deadLinks.values()]
+      .filter((link) => link.permanent || link.recordedAt > cutoff)
+      .map((link) => link.key);
   }
 
   async saveWorkflowRunSnapshot(input: PersistWorkflowRunSnapshotInput): Promise<void> {

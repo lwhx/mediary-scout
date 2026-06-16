@@ -8,18 +8,34 @@
 
 export type DeadLinkKind = "pan115" | "magnet";
 
+/**
+ * How long a SOFT (magnet) dead-link is honored before it resurrects (becomes
+ * retriable again). A magnet's deadness is time-variable — 115 may cache a new
+ * resource later, a dead torrent may regain seeders, or a clean magnet for the
+ * same infohash may appear — so we never poison it forever; we just skip it for
+ * a while to avoid re-transferring it on every run. 115-share deaths are
+ * PERMANENT (that share is gone for good) and ignore this. Tunable.
+ */
+export const MAGNET_DEAD_LINK_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+
 export interface DeadLink {
   /** Stable identity (115:<sharecode> or magnet:<infohash>) — see deadLinkKey. */
   key: string;
   kind: DeadLinkKind;
   reason: string;
+  /** true = never resurrect (115 share is gone); false = soft, expires after the
+   *  TTL so a magnet can be retried (it may 秒传 once 115 has cached it). */
+  permanent: boolean;
   recordedAt: string;
 }
 
 /** The DB-backed store of known-dead links (a narrow view of WorkflowRepository). */
 export interface DeadLinkStore {
-  recordDeadLink(input: { key: string; kind: DeadLinkKind; reason: string; now?: string }): Promise<void>;
-  listDeadLinkKeys(): Promise<string[]>;
+  recordDeadLink(input: { key: string; kind: DeadLinkKind; reason: string; permanent: boolean; now?: string }): Promise<void>;
+  /** The keys to filter out of a search RIGHT NOW: every permanent dead-link plus
+   *  every soft one still within its TTL. Expired soft links are omitted (the
+   *  resource gets another chance). */
+  listDeadLinkKeys(options?: { now?: string }): Promise<string[]>;
 }
 
 const PAN115_SHARE = /(?:115\.com|115cdn\.com|anxia\.com)\/s\/([0-9a-z]+)/i;

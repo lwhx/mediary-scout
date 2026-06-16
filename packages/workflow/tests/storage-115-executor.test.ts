@@ -356,6 +356,37 @@ describe("Storage115Executor", () => {
     expect(api.removedOfflineHashes).toEqual([]);
   });
 
+  it("the DEFAULT 秒传 window reaches past the old 2-poll span (a ~late-landing 秒传 is still caught)", async () => {
+    // A real-115 survey measured live 秒传s landing at up to ~4.3s — past the old
+    // 2×2s window. The default must now span ~8s (4 polls) or ~20% of good magnets
+    // would be mis-judged dead. Here the video only appears on the 3rd grace wait,
+    // which the old default (2) would have missed and cancelled.
+    const api = new FakePan115Api();
+    let graceWaits = 0;
+    const executor = new Storage115Executor({
+      api,
+      apiGuardOptions: { minDelayMs: 0 },
+      // NB: offlineMaterializeAttempts intentionally NOT set — exercise the default.
+      offlineMaterializePollMs: 1,
+      sleep: async () => {
+        graceWaits += 1;
+        if (graceWaits === 3) {
+          api.directories["123"] = [{ fid: "late_v", n: "Movie.2160p.mkv", s: "9000000000" }];
+        }
+      },
+    });
+
+    const attempt = await executor.transfer({
+      workflowRunId: "run_late_miaochuan",
+      directoryId: "123",
+      candidate: candidateFixture({ type: "magnet", providerPayload: { url: "magnet:?xt=urn:btih:abcdef", rawType: "magnet" } }),
+    });
+
+    expect(attempt.status).toBe("succeeded");
+    expect(attempt.materializedFileIds).toEqual(["late_v"]);
+    expect(api.removedOfflineHashes).toEqual([]); // caught in time → not cancelled
+  });
+
   it("lists nested subdirectories recursively (the flatten wrapper-dir source)", async () => {
     const api = new FakePan115Api({
       directories: {

@@ -69,9 +69,9 @@ class RecordingExecutor implements StorageExecutor {
 }
 
 class FakeDeadLinkStore {
-  recorded: Array<{ key: string; kind: string; reason: string }> = [];
-  async recordDeadLink(input: { key: string; kind: "pan115" | "magnet"; reason: string }): Promise<void> {
-    this.recorded.push({ key: input.key, kind: input.kind, reason: input.reason });
+  recorded: Array<{ key: string; kind: string; reason: string; permanent: boolean }> = [];
+  async recordDeadLink(input: { key: string; kind: "pan115" | "magnet"; reason: string; permanent: boolean }): Promise<void> {
+    this.recorded.push({ key: input.key, kind: input.kind, reason: input.reason, permanent: input.permanent });
   }
   async listDeadLinkKeys(): Promise<string[]> {
     return this.recorded.map((r) => r.key);
@@ -170,7 +170,7 @@ describe("RealStorageV2 — StorageExecutor → StorageV2 adapter", () => {
 
       await storage.transferCandidate({ candidateId: "share", intoDirectoryId: "staging" });
 
-      expect(store.recorded).toEqual([{ key: "115:sww96353nl6", kind: "pan115", reason: "链接已过期" }]);
+      expect(store.recorded).toEqual([{ key: "115:sww96353nl6", kind: "pan115", reason: "链接已过期", permanent: true }]);
     });
 
     it("records a magnet that did NOT 秒传 (no_target_change), keyed by infohash", async () => {
@@ -182,7 +182,8 @@ describe("RealStorageV2 — StorageExecutor → StorageV2 adapter", () => {
       await storage.transferCandidate({ candidateId: "mag", intoDirectoryId: "staging" });
 
       expect(store.recorded).toEqual([
-        { key: "magnet:edef9b0fc91c9ccdf5b3e43f6cc5278160e81dd5", kind: "magnet", reason: "no target materialized" },
+        // a magnet is SOFT (permanent: false) — it may resurrect (see deadLinkKey).
+        { key: "magnet:edef9b0fc91c9ccdf5b3e43f6cc5278160e81dd5", kind: "magnet", reason: "no target materialized", permanent: false },
       ]);
     });
 
