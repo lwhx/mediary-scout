@@ -218,6 +218,19 @@ export async function getPreferredLanguage(
 
 export const PREFERRED_LANGUAGE_SETTING_KEY = "preferred_language";
 
+export const QUALITY_PREFERENCE_SETTING_KEY = "quality_preference";
+
+/** The user's acquisition quality preference, or undefined when 不限/unset
+ *  (the default). undefined → inject NO quality guidance (coverage-only, current
+ *  behavior). Only "high"/"medium" are honored; anything else (incl. the legacy
+ *  "4K" value) is treated as 不限. */
+export async function getQualityPreference(
+  repository: { getSetting(key: string): Promise<string | null> },
+): Promise<"high" | "medium" | undefined> {
+  const value = (await repository.getSetting(QUALITY_PREFERENCE_SETTING_KEY))?.trim();
+  return value === "high" || value === "medium" ? value : undefined;
+}
+
 export const DAILY_SWEEP_TIME_SETTING_KEY = "daily_sweep_time";
 /** Default daily 巡检 time (Beijing) when the user hasn't configured one. */
 export const DEFAULT_DAILY_SWEEP_TIME = "06:00";
@@ -644,17 +657,22 @@ function getWorkerStorageExecutor(): StorageExecutor {
  */
 async function getAgentModel(repository: {
   getSetting(key: string): Promise<string | null>;
-}): Promise<{ model: ReturnType<typeof createAgentModelFromEnv>; preferredLanguage: string | undefined }> {
+}): Promise<{
+  model: ReturnType<typeof createAgentModelFromEnv>;
+  preferredLanguage: string | undefined;
+  qualityPreference: "high" | "medium" | undefined;
+}> {
   assertWorkflowAgentAdapterPolicy(process.env);
   const adapter = process.env.MEDIA_TRACK_AGENT_ADAPTER === "vercel-ai" ? "vercel-ai" : "fake";
   const preferredLanguage = await getPreferredLanguage(repository);
+  const qualityPreference = await getQualityPreference(repository);
   if (agentModel?.adapter !== adapter) {
     agentModel = {
       adapter,
       model: adapter === "vercel-ai" ? createAgentModelFromEnv(process.env) : createStubAcquisitionModel(),
     };
   }
-  return { model: agentModel.model, preferredLanguage };
+  return { model: agentModel.model, preferredLanguage, qualityPreference };
 }
 
 function fakeTransferOutcomes() {
