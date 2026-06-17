@@ -83,6 +83,16 @@ export function getWorkflowRepository(): WorkflowRepository {
   return repository;
 }
 
+/**
+ * The account whose data the current request/worker context operates on. §7 P0:
+ * always the implicit default account (single-user, no login). P1 swaps this for
+ * the session-resolved account when MEDIA_TRACK_MULTI_USER is enabled — every
+ * read already threads it, so that becomes a one-line change here.
+ */
+export async function getCurrentAccountId(): Promise<string> {
+  return DEFAULT_ACCOUNT_ID;
+}
+
 export async function ensureDemoSeeded(targetRepository: WorkflowRepository): Promise<void> {
   if (process.env.MEDIA_TRACK_DEMO_SEED === "0") {
     return;
@@ -185,6 +195,10 @@ export async function runStartupMigrations(): Promise<void> {
 
 export async function runNextQueuedWorkflow() {
   const repository = getWorkflowRepository();
+  // §7 P0: single-instance worker, single (default) account. P1 multi-account
+  // restructures this to claim-first then resolve the claimed run's account; for
+  // now the queue is one account's, so resolve its credentials up front.
+  const accountId = await getCurrentAccountId();
   await hydratePan115CookieFromDb();
   // The user's language preference is standing context baked into the agent
   // instance (one global preference), so every workflow — movie, series, type2,
@@ -192,16 +206,18 @@ export async function runNextQueuedWorkflow() {
   const { model, preferredLanguage, qualityPreference } = await getAgentModel(repository);
   const language = preferredLanguage === undefined ? {} : { preferredLanguage };
   const quality = qualityPreference === undefined ? {} : { qualityPreference };
+  const storage = await getWorkerStorageExecutor(accountId);
+  const parents = await getWorkerStorageParents(accountId);
   const startedAt = new Date().toISOString();
   const type2 = await runQueuedType2Workflow({
     repository,
     resourceProvider: await getWorkerResourceProvider(),
-    storage: getWorkerStorageExecutor(),
+    storage,
     model,
     ...language,
     ...quality,
-    storageParentDirectoryId: storageParentDirectoryId(),
-    animeStorageParentDirectoryId: animeParentDirectoryId(),
+    storageParentDirectoryId: parents.tv,
+    animeStorageParentDirectoryId: parents.anime,
   });
   if (type2.status !== "idle") {
     await pushNotificationsSince(repository, startedAt);
@@ -210,12 +226,12 @@ export async function runNextQueuedWorkflow() {
   const series = await runQueuedSeriesInitialization({
     repository,
     resourceProvider: await getWorkerResourceProvider(),
-    storage: getWorkerStorageExecutor(),
+    storage,
     model,
     ...language,
     ...quality,
-    storageParentDirectoryId: storageParentDirectoryId(),
-    animeStorageParentDirectoryId: animeParentDirectoryId(),
+    storageParentDirectoryId: parents.tv,
+    animeStorageParentDirectoryId: parents.anime,
   });
   if (series.status !== "idle") {
     await pushNotificationsSince(repository, startedAt);
@@ -224,11 +240,11 @@ export async function runNextQueuedWorkflow() {
   const movie = await runQueuedMovieAcquisition({
     repository,
     resourceProvider: await getWorkerResourceProvider(),
-    storage: getWorkerStorageExecutor(),
+    storage,
     model,
     ...language,
     ...quality,
-    moviesParentDirectoryId: moviesParentDirectoryId(),
+    moviesParentDirectoryId: parents.movies,
   });
   if (movie.status !== "idle") {
     await pushNotificationsSince(repository, startedAt);
@@ -592,17 +608,19 @@ export async function runScheduledType3(options?: { force?: boolean }): Promise<
   try {
     await hydratePan115CookieFromDb();
     const sync = tmdbSeasonMetadataSync();
+    const accountId = await getCurrentAccountId();
     const { model, preferredLanguage, qualityPreference } = await getAgentModel(repository);
+    const parents = await getWorkerStorageParents(accountId);
     result = await runScheduledType3Monitoring({
       repository,
       resourceProvider: await getWorkerResourceProvider(),
-      storage: getWorkerStorageExecutor(),
+      storage: await getWorkerStorageExecutor(accountId),
       model,
       ...(preferredLanguage === undefined ? {} : { preferredLanguage }),
       ...(qualityPreference === undefined ? {} : { qualityPreference }),
-      storageParentDirectoryId: storageParentDirectoryId(),
-      animeStorageParentDirectoryId: animeParentDirectoryId(),
-      moviesParentDirectoryId: moviesParentDirectoryId(),
+      storageParentDirectoryId: parents.tv,
+      animeStorageParentDirectoryId: parents.anime,
+      moviesParentDirectoryId: parents.movies,
       staleActiveRunTimeoutMs: 30 * 60 * 1000,
       ...(sync ? { syncSeasonMetadata: sync } : {}),
     });
@@ -773,10 +791,55 @@ async function getWorkerResourceProvider(): Promise<ResourceProvider> {
   return fakeResourceProvider;
 }
 
-function getWorkerStorageExecutor(): StorageExecutor {
+/** §7: the account's 115 credentials (cookie + category CIDs) from its
+ *  connected_storages record. null when the account hasn't connected a 115 yet
+ *  (then the worker falls back to the legacy env cookie / env CIDs). */
+interface AccountStorageCredentials {
+  cookie: string;
+  rootCid: string | null;
+  moviesCid: string | null;
+  tvCid: string | null;
+  animeCid: string | null;
+}
+
+async function getAccountStorageCredentials(
+  accountId: string,
+): Promise<AccountStorageCredentials | null> {
+  try {
+    const storages = await getWorkflowRepository().listConnectedStorages(accountId);
+    const pan115 = storages.find((storage) => storage.provider === "pan115");
+    const cookie = (pan115?.payload as { cookie?: string } | null)?.cookie?.trim();
+    if (!pan115 || !cookie) {
+      return null;
+    }
+    return {
+      cookie,
+      rootCid: pan115.rootCid,
+      moviesCid: pan115.moviesCid,
+      tvCid: pan115.tvCid,
+      animeCid: pan115.animeCid,
+    };
+  } catch (error) {
+    console.error(`[media-track] failed to load 115 credentials for ${accountId}: ${String(error)}`);
+    return null;
+  }
+}
+
+/**
+ * §7 P0: the worker resolves the 115 executor from the run's account credentials
+ * (connected_storages.payload.cookie) instead of the global env cookie. Single-
+ * user is unchanged: the migrated default-account cookie is byte-identical to the
+ * env one. Falls back to the env cookie when the account has no 115 connection
+ * (fresh deploy before QR connect, or the legacy env-only path).
+ */
+async function getWorkerStorageExecutor(
+  accountId: string = DEFAULT_ACCOUNT_ID,
+): Promise<StorageExecutor> {
   const adapter = process.env.MEDIA_TRACK_STORAGE_ADAPTER ?? "fake";
   if (adapter === "115") {
-    return createProtectedPan115CookieStorageExecutorFromEnv({ env: process.env });
+    const creds = await getAccountStorageCredentials(accountId);
+    const env = creds ? { ...process.env, PAN115_COOKIE: creds.cookie } : process.env;
+    return createProtectedPan115CookieStorageExecutorFromEnv({ env });
   }
   if (adapter !== "fake") {
     throw new Error(`MEDIA_TRACK_STORAGE_ADAPTER_UNSUPPORTED: ${adapter}`);
@@ -785,6 +848,27 @@ function getWorkerStorageExecutor(): StorageExecutor {
     transferOutcomes: fakeTransferOutcomes(),
   });
   return fakeStorageExecutor;
+}
+
+/**
+ * The 115 landing parent CIDs for a run's account. Sourced from the account's
+ * connected_storage (set at connect-time directory provision); falls back to the
+ * env CIDs when the account has no 115 connection or the adapter is fake.
+ */
+async function getWorkerStorageParents(accountId: string = DEFAULT_ACCOUNT_ID): Promise<{
+  tv: string;
+  anime: string;
+  movies: string;
+}> {
+  const creds =
+    process.env.MEDIA_TRACK_STORAGE_ADAPTER === "115"
+      ? await getAccountStorageCredentials(accountId)
+      : null;
+  return {
+    tv: creds?.tvCid || storageParentDirectoryId(),
+    anime: creds?.animeCid || creds?.tvCid || animeParentDirectoryId(),
+    movies: creds?.moviesCid || moviesParentDirectoryId(),
+  };
 }
 
 /**
@@ -899,7 +983,7 @@ export interface ForeignWorkReview {
 /** Foreign-work findings recorded by a run, for the user-confirmation page. */
 export async function getForeignWorkReview(workflowRunId: string): Promise<ForeignWorkReview | null> {
   const repository = getWorkflowRepository();
-  const snapshot = await repository.getWorkflowRunSnapshot(workflowRunId);
+  const snapshot = await repository.getWorkflowRunSnapshot(workflowRunId, await getCurrentAccountId());
   if (!snapshot) {
     return null;
   }
@@ -915,12 +999,14 @@ export async function importForeignWorkFiles(input: {
   movieTitle: string;
   year: number;
 }): Promise<{ movieDirectoryId: string; movedFileIds: string[] }> {
+  const accountId = await getCurrentAccountId();
+  const parents = await getWorkerStorageParents(accountId);
   return importForeignWorkAsMovie({
-    storage: getWorkerStorageExecutor(),
+    storage: await getWorkerStorageExecutor(accountId),
     providerFileIds: input.providerFileIds,
     movieTitle: input.movieTitle,
     year: input.year,
-    moviesParentDirectoryId: moviesParentDirectoryId(),
+    moviesParentDirectoryId: parents.movies,
   });
 }
 

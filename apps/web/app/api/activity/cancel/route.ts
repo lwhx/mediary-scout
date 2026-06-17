@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { getWorkflowRepository } from "../../../../lib/workflow-runtime";
+import { getCurrentAccountId, getWorkflowRepository } from "../../../../lib/workflow-runtime";
 
 /**
  * Cancel a still-QUEUED acquisition (user action from the activity page). Deletes
@@ -13,6 +13,6 @@ export async function POST(request: NextRequest) {
   if (!runId) {
     return NextResponse.json({ error: "runId required" }, { status: 400 });
   }
-  const result = await getWorkflowRepository().cancelQueuedWorkflowRun(runId);
+  const result = await getWorkflowRepository().cancelQueuedWorkflowRun(runId, await getCurrentAccountId());
   return NextResponse.json(result);
 }
