@@ -15,7 +15,9 @@ import {
 import { MAGNET_DEAD_LINK_TTL_MS } from "./acquisition-v2/dead-links.js";
 import type { DeadLink, DeadLinkStore } from "./acquisition-v2/dead-links.js";
 import type {
+  Account,
   ConnectedStorage,
+  Session,
   UpsertConnectedStorageInput,
 } from "./account-credentials.js";
 
@@ -143,7 +145,24 @@ export interface WorkflowRepository extends DeadLinkStore {
   upsertConnectedStorage(row: UpsertConnectedStorageInput): Promise<void>;
   /** Instance-wide lookup enforcing UNIQUE(provider, provider_uid) ownership. */
   findConnectedStorageByUid(provider: string, providerUid: string): Promise<ConnectedStorage | null>;
+  /** Accounts + sessions (§7 P1 auth). createAccount throws on a duplicate
+   *  username (UNIQUE), surfaced to the register route as "用户名已存在". */
+  createAccount(account: Account): Promise<void>;
+  getAccountByUsername(username: string): Promise<Account | null>;
+  getAccountById(id: string): Promise<Account | null>;
+  listAccounts(): Promise<Account[]>;
+  createSession(session: Session): Promise<void>;
+  getSession(id: string): Promise<Session | null>;
+  deleteSession(id: string): Promise<void>;
   // recordDeadLink + listDeadLinkKeys come from DeadLinkStore.
+}
+
+/** Thrown by createAccount when the username is already taken. */
+export class DuplicateUsernameError extends Error {
+  constructor(username: string) {
+    super(`Username already exists: ${username}`);
+    this.name = "DuplicateUsernameError";
+  }
 }
 
 export class InMemoryWorkflowRepository implements WorkflowRepository {
@@ -152,6 +171,8 @@ export class InMemoryWorkflowRepository implements WorkflowRepository {
   private readonly settings = new Map<string, string>();
   private readonly accountSettings = new Map<string, Map<string, string>>();
   private readonly connectedStorages = new Map<string, ConnectedStorage>();
+  private readonly accounts = new Map<string, Account>();
+  private readonly sessions = new Map<string, Session>();
   private readonly deadLinks = new Map<string, DeadLink>();
 
   async getSetting(key: string): Promise<string | null> {
@@ -203,6 +224,46 @@ export class InMemoryWorkflowRepository implements WorkflowRepository {
   ): Promise<ConnectedStorage | null> {
     const found = this.connectedStorages.get(connectedStorageKey(provider, providerUid));
     return found ? { ...found } : null;
+  }
+
+  async createAccount(account: Account): Promise<void> {
+    for (const existing of this.accounts.values()) {
+      if (existing.username === account.username) {
+        throw new DuplicateUsernameError(account.username);
+      }
+    }
+    this.accounts.set(account.id, { ...account });
+  }
+
+  async getAccountByUsername(username: string): Promise<Account | null> {
+    for (const account of this.accounts.values()) {
+      if (account.username === username) {
+        return { ...account };
+      }
+    }
+    return null;
+  }
+
+  async getAccountById(id: string): Promise<Account | null> {
+    const found = this.accounts.get(id);
+    return found ? { ...found } : null;
+  }
+
+  async listAccounts(): Promise<Account[]> {
+    return [...this.accounts.values()].map((account) => ({ ...account }));
+  }
+
+  async createSession(session: Session): Promise<void> {
+    this.sessions.set(session.id, { ...session });
+  }
+
+  async getSession(id: string): Promise<Session | null> {
+    const found = this.sessions.get(id);
+    return found ? { ...found } : null;
+  }
+
+  async deleteSession(id: string): Promise<void> {
+    this.sessions.delete(id);
   }
 
   async recordDeadLink(input: {

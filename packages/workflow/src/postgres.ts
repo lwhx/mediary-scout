@@ -27,10 +27,16 @@ import {
   validateWorkflowRunSnapshot,
   withDerivedEpisodeSummaries,
   workflowSnapshotFromReservation,
+  DuplicateUsernameError,
   type WorkflowRunReservationResult,
   type WorkflowRepository,
 } from "./repository.js";
-import type { ConnectedStorage, UpsertConnectedStorageInput } from "./account-credentials.js";
+import type {
+  Account,
+  ConnectedStorage,
+  Session,
+  UpsertConnectedStorageInput,
+} from "./account-credentials.js";
 import { MAGNET_DEAD_LINK_TTL_MS } from "./acquisition-v2/dead-links.js";
 
 type Queryable = Pool | PoolClient;
@@ -531,6 +537,81 @@ export class PostgresWorkflowRepository implements WorkflowRepository {
     return row ? connectedStorageFromRow(row) : null;
   }
 
+  async createAccount(account: Account): Promise<void> {
+    await this.ensureSchema();
+    try {
+      await this.pool.query(
+        "INSERT INTO accounts (id, username, password_hash, group_id, is_owner, created_at) " +
+          "VALUES ($1, $2, $3, $4, $5, $6)",
+        [account.id, account.username, account.passwordHash, account.groupId, account.isOwner, account.createdAt],
+      );
+    } catch (error) {
+      // 23505 = unique_violation (username UNIQUE).
+      if (error && typeof error === "object" && (error as { code?: string }).code === "23505") {
+        throw new DuplicateUsernameError(account.username);
+      }
+      throw error;
+    }
+  }
+
+  async getAccountByUsername(username: string): Promise<Account | null> {
+    await this.ensureSchema();
+    const result = await this.pool.query(
+      "SELECT id, username, password_hash, group_id, is_owner, created_at FROM accounts WHERE username = $1",
+      [username],
+    );
+    const row = result.rows[0];
+    return row ? accountFromRow(row) : null;
+  }
+
+  async getAccountById(id: string): Promise<Account | null> {
+    await this.ensureSchema();
+    const result = await this.pool.query(
+      "SELECT id, username, password_hash, group_id, is_owner, created_at FROM accounts WHERE id = $1",
+      [id],
+    );
+    const row = result.rows[0];
+    return row ? accountFromRow(row) : null;
+  }
+
+  async listAccounts(): Promise<Account[]> {
+    await this.ensureSchema();
+    const result = await this.pool.query(
+      "SELECT id, username, password_hash, group_id, is_owner, created_at FROM accounts ORDER BY created_at",
+    );
+    return result.rows.map((row) => accountFromRow(row));
+  }
+
+  async createSession(session: Session): Promise<void> {
+    await this.ensureSchema();
+    await this.pool.query(
+      "INSERT INTO sessions (id, account_id, expires_at, created_at) VALUES ($1, $2, $3, $4)",
+      [session.id, session.accountId, session.expiresAt, session.createdAt],
+    );
+  }
+
+  async getSession(id: string): Promise<Session | null> {
+    await this.ensureSchema();
+    const result = await this.pool.query(
+      "SELECT id, account_id, expires_at, created_at FROM sessions WHERE id = $1",
+      [id],
+    );
+    const row = result.rows[0];
+    return row
+      ? {
+          id: String(row.id),
+          accountId: String(row.account_id),
+          expiresAt: String(row.expires_at),
+          createdAt: String(row.created_at),
+        }
+      : null;
+  }
+
+  async deleteSession(id: string): Promise<void> {
+    await this.ensureSchema();
+    await this.pool.query("DELETE FROM sessions WHERE id = $1", [id]);
+  }
+
   async recordDeadLink(input: {
     key: string;
     kind: "pan115" | "magnet";
@@ -836,6 +917,17 @@ export class PostgresWorkflowRepository implements WorkflowRepository {
 
 function json(value: unknown): string {
   return JSON.stringify(value);
+}
+
+function accountFromRow(row: Record<string, unknown>): Account {
+  return {
+    id: String(row.id),
+    username: String(row.username),
+    passwordHash: String(row.password_hash),
+    groupId: (row.group_id as string | null | undefined) ?? null,
+    isOwner: Boolean(row.is_owner),
+    createdAt: String(row.created_at),
+  };
 }
 
 function connectedStorageFromRow(row: Record<string, unknown>): ConnectedStorage {

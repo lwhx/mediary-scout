@@ -14,6 +14,25 @@ export interface ConnectedStorageRow {
   providerUid: string;
 }
 
+/** A local account (identity). password_hash empty for the implicit default
+ *  account in single-user mode (no login). */
+export interface Account {
+  id: string;
+  username: string;
+  passwordHash: string;
+  groupId: string | null;
+  isOwner: boolean;
+  createdAt: string;
+}
+
+/** A login session row; the signed httpOnly cookie carries its id. */
+export interface Session {
+  id: string;
+  accountId: string;
+  expiresAt: string;
+  createdAt: string;
+}
+
 /** A network drive bound to an account (full persisted shape). */
 export interface ConnectedStorage {
   id: string;
