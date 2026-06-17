@@ -18,7 +18,7 @@ import type { NotificationEvent, NotificationReportStatus } from "@media-track/w
 import { landedSize } from "@media-track/workflow";
 import { NotificationsSeenMarker } from "../../components/notifications-seen-marker";
 import { AppSidebar } from "../../components/app-sidebar";
-import { ensureDemoSeeded, getWorkflowRepository } from "../../lib/workflow-runtime";
+import { ensureDemoSeeded, getCurrentAccountId, getWorkflowRepository } from "../../lib/workflow-runtime";
 
 // The kind only drives the leading ICON now — its textual label used to render
 // as a second badge next to the status pill ("开始追踪" beside "已完结"), which
@@ -71,13 +71,14 @@ async function NotificationFeed() {
   // so the PPR shell stays static and this hole streams per request.
   await connection();
   const repository = getWorkflowRepository();
+  const accountId = await getCurrentAccountId();
   await ensureDemoSeeded(repository);
-  const notifications = await repository.listNotifications({ limit: 100 });
+  const notifications = await repository.listNotifications({ limit: 100, accountId });
 
   // Poster backfill: older notifications predate report.posterPath. Source the
   // poster from the still-tracked title (by tmdbId, then name) so cards show a
   // real poster instead of nothing.
-  const trackedStates = await repository.listTrackedSeasonStates();
+  const trackedStates = await repository.listTrackedSeasonStates(accountId);
   const posterByTmdb = new Map<number, string>();
   const posterByName = new Map<string, string>();
   for (const state of trackedStates) {

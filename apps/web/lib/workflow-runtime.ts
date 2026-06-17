@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import {
   PanSouResourceProvider,
   createProtectedPan115CookieStorageExecutorFromEnv,
@@ -32,7 +33,15 @@ import {
   sendPushNotifications,
   createPostgresWorkflowRepositorySync,
   migrateLegacyCookieToDefaultAccount,
+  hashPassword,
+  verifyPassword,
+  signSession,
+  verifySession,
+  isSessionExpired,
+  generateSessionId,
+  DuplicateUsernameError,
   DEFAULT_ACCOUNT_ID,
+  type Account,
   type MediaSearchCandidate,
   type MediaTitle,
   type NotificationEvent,
@@ -83,14 +92,162 @@ export function getWorkflowRepository(): WorkflowRepository {
   return repository;
 }
 
+const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
+
+export type AuthOutcome =
+  | { ok: true; accountId: string; signedCookie: string }
+  | { ok: false; error: string };
+
+/** Create a session row + signed httpOnly cookie value for an account. */
+async function createLoginSession(accountId: string): Promise<string> {
+  const repository = getWorkflowRepository();
+  const sessionId = generateSessionId();
+  const nowMs = Date.now();
+  await repository.createSession({
+    id: sessionId,
+    accountId,
+    expiresAt: new Date(nowMs + SESSION_TTL_MS).toISOString(),
+    createdAt: new Date(nowMs).toISOString(),
+  });
+  return signSession(sessionId, await getSessionSecret());
+}
+
 /**
- * The account whose data the current request/worker context operates on. §7 P0:
- * always the implicit default account (single-user, no login). P1 swaps this for
- * the session-resolved account when MEDIA_TRACK_MULTI_USER is enabled — every
- * read already threads it, so that becomes a one-line change here.
+ * Register a local account (multi-user). v1: open registration (self-host — the
+ * operator controls who can reach the instance; login exists to separate data,
+ * not to defend a public endpoint). The first account created is the owner, for
+ * future group/admin features. Returns a signed session cookie (auto-login).
+ */
+export async function registerAccount(username: string, password: string): Promise<AuthOutcome> {
+  const trimmed = username.trim();
+  if (trimmed.length < 2 || password.length < 6) {
+    return { ok: false, error: "用户名至少 2 位、密码至少 6 位。" };
+  }
+  const repository = getWorkflowRepository();
+  const isFirst = (await repository.listAccounts()).every((account) => account.id === DEFAULT_ACCOUNT_ID);
+  const account: Account = {
+    id: `acct_${randomBytes(12).toString("hex")}`,
+    username: trimmed,
+    passwordHash: await hashPassword(password),
+    groupId: null,
+    isOwner: isFirst,
+    createdAt: new Date().toISOString(),
+  };
+  try {
+    await repository.createAccount(account);
+  } catch (error) {
+    if (error instanceof DuplicateUsernameError) {
+      return { ok: false, error: "用户名已存在。" };
+    }
+    throw error;
+  }
+  return { ok: true, accountId: account.id, signedCookie: await createLoginSession(account.id) };
+}
+
+/** Authenticate username+password and start a session. */
+export async function loginAccount(username: string, password: string): Promise<AuthOutcome> {
+  const account = await getWorkflowRepository().getAccountByUsername(username.trim());
+  // Verify even when the account is missing-ish to avoid trivial username probing
+  // (the empty-hash default account has no password and can't be logged into).
+  const hash = account?.passwordHash ?? "";
+  const valid = hash.length > 0 && (await verifyPassword(password, hash));
+  if (!account || !valid) {
+    return { ok: false, error: "用户名或密码不正确。" };
+  }
+  return { ok: true, accountId: account.id, signedCookie: await createLoginSession(account.id) };
+}
+
+/** Destroy the session behind a signed cookie (logout). Best-effort. */
+export async function logoutSession(signedCookie: string | undefined): Promise<void> {
+  if (!signedCookie) {
+    return;
+  }
+  const sessionId = verifySession(signedCookie, await getSessionSecret());
+  if (sessionId) {
+    await getWorkflowRepository().deleteSession(sessionId);
+  }
+}
+
+/** §7 P1: multi-user mode gates the login/register UI + session enforcement.
+ *  Default OFF → single-user, no login, everything is the implicit default
+ *  account (P0 behavior, zero-change). */
+export function isMultiUserEnabled(): boolean {
+  return process.env.MEDIA_TRACK_MULTI_USER === "1";
+}
+
+export const SESSION_COOKIE_NAME = "mt_session";
+const SESSION_SECRET_SETTING_KEY = "session_secret";
+/** Sentinel account that owns no data — returned in multi-user mode when there
+ *  is no valid session, so reads fail CLOSED (empty) instead of leaking the
+ *  default account's data to an unauthenticated caller. Middleware normally
+ *  redirects first; this is defense-in-depth. */
+export const UNAUTHENTICATED_ACCOUNT_ID = "acct_unauthenticated";
+
+let sessionSecretCache: string | null = null;
+
+/** The HMAC secret for session cookies: env override, else a generated value
+ *  persisted in global app_settings (self-host: stable across restarts, the
+ *  operator needn't manage it). */
+export async function getSessionSecret(): Promise<string> {
+  if (sessionSecretCache) {
+    return sessionSecretCache;
+  }
+  const envSecret = process.env.MEDIA_TRACK_SESSION_SECRET?.trim();
+  if (envSecret) {
+    sessionSecretCache = envSecret;
+    return envSecret;
+  }
+  const repository = getWorkflowRepository();
+  const stored = (await repository.getSetting(SESSION_SECRET_SETTING_KEY))?.trim();
+  if (stored) {
+    sessionSecretCache = stored;
+    return stored;
+  }
+  const generated = randomBytes(32).toString("hex");
+  await repository.setSetting(SESSION_SECRET_SETTING_KEY, generated);
+  sessionSecretCache = generated;
+  return generated;
+}
+
+/** Resolve a signed session cookie value to its account id, or null if the
+ *  signature is bad, the session is unknown, or it has expired. */
+export async function resolveSessionAccountId(signedCookie: string): Promise<string | null> {
+  const secret = await getSessionSecret();
+  const sessionId = verifySession(signedCookie, secret);
+  if (!sessionId) {
+    return null;
+  }
+  const session = await getWorkflowRepository().getSession(sessionId);
+  if (!session || isSessionExpired(session.expiresAt, new Date().toISOString())) {
+    return null;
+  }
+  return session.accountId;
+}
+
+/**
+ * The account whose data the current context operates on. Single-user (multi-user
+ * disabled) → the implicit default account, with no cookie access (so the worker
+ * and non-request contexts are safe). Multi-user → resolve the signed session
+ * cookie in a request context; absent/invalid session falls back to the
+ * no-data sentinel (fail-closed; middleware redirects to /login first).
  */
 export async function getCurrentAccountId(): Promise<string> {
-  return DEFAULT_ACCOUNT_ID;
+  if (!isMultiUserEnabled()) {
+    return DEFAULT_ACCOUNT_ID;
+  }
+  try {
+    const { cookies } = await import("next/headers");
+    const store = await cookies();
+    const raw = store.get(SESSION_COOKIE_NAME)?.value;
+    if (!raw) {
+      return UNAUTHENTICATED_ACCOUNT_ID;
+    }
+    return (await resolveSessionAccountId(raw)) ?? UNAUTHENTICATED_ACCOUNT_ID;
+  } catch {
+    // No request scope (the in-process worker) — it resolves credentials per
+    // claimed run.accountId, not via the request cookie.
+    return DEFAULT_ACCOUNT_ID;
+  }
 }
 
 export async function ensureDemoSeeded(targetRepository: WorkflowRepository): Promise<void> {
@@ -103,8 +260,10 @@ export async function ensureDemoSeeded(targetRepository: WorkflowRepository): Pr
 
 export async function getWorkflowStatusView(
   targetRepository: WorkflowRepository,
+  accountId?: string,
 ): Promise<TrackedSeasonStatusView | null> {
-  const trackedStates = await targetRepository.listTrackedSeasonStates();
+  const resolvedAccountId = accountId ?? (await getCurrentAccountId());
+  const trackedStates = await targetRepository.listTrackedSeasonStates(resolvedAccountId);
   // The spotlight is the season that still needs attention: prefer an
   // actively-airing season over completed ones.
   const firstTracked =
@@ -115,6 +274,7 @@ export async function getWorkflowStatusView(
   return getTrackedSeasonStatusView({
     repository: targetRepository,
     trackedSeasonId: firstTracked.season.id,
+    accountId: resolvedAccountId,
   });
 }
 

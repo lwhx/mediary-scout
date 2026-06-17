@@ -21,6 +21,7 @@ import {
 import { PostgresMediaSearchCache } from "./tmdb-cache";
 import {
   ensureDemoSeeded,
+  getCurrentAccountId,
   getTmdbAccesses,
   getWorkflowRepository,
   movieTargetFromTmdbId,
@@ -158,8 +159,9 @@ async function seriesTargetFor(tmdbId: number): Promise<PreparedSeriesTarget | n
 
 export async function getTitleHubView(tmdbId: number): Promise<TitleHubView | null> {
   const repository = getWorkflowRepository();
+  const accountId = await getCurrentAccountId();
   await ensureDemoSeeded(repository);
-  const trackedStates = (await repository.listTrackedSeasonStates()).filter(
+  const trackedStates = (await repository.listTrackedSeasonStates(accountId)).filter(
     // tv AND anime are season-shaped detail pages; only movies are excluded.
     (state) => state.title.tmdbId === tmdbId && state.title.type !== "movie",
   );
@@ -227,7 +229,7 @@ export async function getTitleHubView(tmdbId: number): Promise<TitleHubView | nu
   const aggregate = aggregateStateFromSeasons(seasons);
   const airing = aggregateAiring(seasons);
 
-  const acquiring = (await repository.listActiveWorkflowRuns()).some(
+  const acquiring = (await repository.listActiveWorkflowRuns(accountId)).some(
     (snapshot) => snapshot.title.tmdbId === tmdbId,
   );
 
@@ -252,15 +254,16 @@ export async function getTitleHubView(tmdbId: number): Promise<TitleHubView | nu
  */
 export async function getDetailView(tmdbId: number): Promise<DetailView | null> {
   const repository = getWorkflowRepository();
+  const accountId = await getCurrentAccountId();
   await ensureDemoSeeded(repository);
   const now = new Date().toISOString();
 
-  const trackedForTitle = (await repository.listTrackedSeasonStates()).filter(
+  const trackedForTitle = (await repository.listTrackedSeasonStates(accountId)).filter(
     (state) => state.title.tmdbId === tmdbId,
   );
   const movieState = trackedForTitle.find((state) => state.title.type === "movie");
   if (movieState) {
-    const acquiring = (await repository.listActiveWorkflowRuns()).some(
+    const acquiring = (await repository.listActiveWorkflowRuns(accountId)).some(
       (snapshot) => snapshot.title.tmdbId === tmdbId,
     );
     const obtained = movieState.episodes.some((episode) => episode.obtained);
@@ -322,13 +325,14 @@ export async function queueRemainingSeasons(
   tmdbId: number,
 ): Promise<CandidateTrackingRequestResult> {
   const repository = getWorkflowRepository();
+  const accountId = await getCurrentAccountId();
   await ensureDemoSeeded(repository);
   const target = await seriesTargetFor(tmdbId);
   if (!target) {
     return { status: "unsupported", message: "无法获取该剧的季信息。" };
   }
   const trackedSeasonNumbers = new Set(
-    (await repository.listTrackedSeasonStates())
+    (await repository.listTrackedSeasonStates(accountId))
       .filter((state) => state.title.tmdbId === tmdbId && state.title.type !== "movie")
       .map((state) => state.season.seasonNumber),
   );
@@ -383,9 +387,10 @@ export interface LibraryTypeCounts {
 /** Poster-wall view of every tracked title. */
 export async function getLibraryWall(): Promise<LibraryWallEntry[]> {
   const repository = getWorkflowRepository();
+  const accountId = await getCurrentAccountId();
   await ensureDemoSeeded(repository);
   const now = new Date().toISOString();
-  const states = await repository.listTrackedSeasonStates();
+  const states = await repository.listTrackedSeasonStates(accountId);
   const byTitle = new Map<number, typeof states>();
   for (const state of states) {
     const list = byTitle.get(state.title.tmdbId) ?? [];
@@ -450,7 +455,8 @@ export interface InProgressTitle {
  */
 export async function getInProgressTitles(): Promise<InProgressTitle[]> {
   const repository = getWorkflowRepository();
-  const active = await repository.listActiveWorkflowRuns();
+  const accountId = await getCurrentAccountId();
+  const active = await repository.listActiveWorkflowRuns(accountId);
   const byTmdb = new Map<number, InProgressTitle>();
   for (const snapshot of active) {
     const title = snapshot.title;

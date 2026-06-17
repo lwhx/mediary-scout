@@ -1,5 +1,5 @@
 import { connection, NextResponse } from "next/server";
-import { ensureDemoSeeded, getWorkflowRepository } from "../../../../lib/workflow-runtime";
+import { ensureDemoSeeded, getCurrentAccountId, getWorkflowRepository } from "../../../../lib/workflow-runtime";
 
 /**
  * Lightweight feed metadata for the 通知 nav unread badge: the recent notification
@@ -12,6 +12,6 @@ export async function GET() {
   await connection();
   const repository = getWorkflowRepository();
   await ensureDemoSeeded(repository);
-  const notifications = await repository.listNotifications({ limit: 50 });
+  const notifications = await repository.listNotifications({ limit: 50, accountId: await getCurrentAccountId() });
   return NextResponse.json({ createdAts: notifications.map((notification) => notification.createdAt) });
 }

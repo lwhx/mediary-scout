@@ -1,6 +1,6 @@
 import { connection, NextResponse } from "next/server";
 import { getActivityView } from "../../../lib/activity-view";
-import { ensureDemoSeeded, getWorkflowRepository } from "../../../lib/workflow-runtime";
+import { ensureDemoSeeded, getCurrentAccountId, getWorkflowRepository } from "../../../lib/workflow-runtime";
 
 /**
  * Live activity feed for the /activity page: the queue+running set + recent
@@ -12,6 +12,6 @@ export async function GET() {
   await connection();
   const repository = getWorkflowRepository();
   await ensureDemoSeeded(repository);
-  const view = await getActivityView({ repository });
+  const view = await getActivityView({ repository, accountId: await getCurrentAccountId() });
   return NextResponse.json(view);
 }

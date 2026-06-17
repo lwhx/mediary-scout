@@ -55,14 +55,16 @@ export async function getActivityView(input: {
     WorkflowRepository,
     "listActiveWorkflowRuns" | "listNotifications" | "listTrackedSeasonStates"
   >;
+  /** Scope the queue/notifications to one account (§7). Omitted → default. */
+  accountId?: string;
 }): Promise<ActivityView> {
-  const activeRuns = await input.repository.listActiveWorkflowRuns();
+  const activeRuns = await input.repository.listActiveWorkflowRuns(input.accountId);
 
   // Poster backfill source: older notifications predate report.posterPath, so a
   // completed item can lack a poster. The title is still tracked → source the
   // poster from it (by tmdbId, falling back to title name) so 已完成 shows the
   // real poster instead of the text fallback.
-  const trackedStates = await input.repository.listTrackedSeasonStates();
+  const trackedStates = await input.repository.listTrackedSeasonStates(input.accountId);
   const posterByTmdb = new Map<number, string>();
   const posterByName = new Map<string, string>();
   for (const state of trackedStates) {
@@ -103,7 +105,10 @@ export async function getActivityView(input: {
   // no-op patrol checks. NO time filter — the client session-scopes by matching
   // against the runIds it observed active (notification createdAt ≈ run-start, so
   // a server-side since filter wrongly drops runs the user opened the page after).
-  const notifications = await input.repository.listNotifications({ limit: 30 });
+  const notifications = await input.repository.listNotifications({
+    limit: 30,
+    ...(input.accountId ? { accountId: input.accountId } : {}),
+  });
   const recentCompleted: ActivityCompletedItem[] = notifications
     .filter(
       (notification) => notification.kind !== "already_current" && notification.report !== undefined,

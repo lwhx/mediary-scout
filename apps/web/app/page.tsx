@@ -13,7 +13,7 @@ import {
   type InProgressTitle,
   type LibraryWallEntry,
 } from "../lib/title-hub";
-import { ensureDemoSeeded, getWorkflowRepository } from "../lib/workflow-runtime";
+import { ensureDemoSeeded, getCurrentAccountId, getWorkflowRepository } from "../lib/workflow-runtime";
 import type { SearchCandidateCard, TrackedSeasonState } from "@media-track/workflow";
 
 export default function Page({
@@ -99,7 +99,7 @@ async function SearchResults({ query }: { query: string }) {
   const repository = getWorkflowRepository();
   await ensureDemoSeeded(repository);
   const trackedByTmdbId = new Map<number, TrackedSeasonState[]>();
-  for (const state of await repository.listTrackedSeasonStates()) {
+  for (const state of await repository.listTrackedSeasonStates(await getCurrentAccountId())) {
     // Season-awareness covers anything tracked with seasons — TV AND anime
     // (anime is a TV-shaped title routed to its own library). Only movies, which
     // have no season menu, are excluded. (Was `!== "tv"`, which wrongly hid every

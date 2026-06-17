@@ -10,6 +10,7 @@ import { demoMediaSearchProvider } from "./demo-candidates";
 import { PostgresMediaSearchCache } from "./tmdb-cache";
 import {
   ensureDemoSeeded,
+  getCurrentAccountId,
   getTmdbAccesses,
   getWorkflowRepository,
   getWorkflowStatusView,
@@ -68,12 +69,13 @@ export interface LibraryDashboard extends DashboardState {
 
 export async function getLibraryDashboard(): Promise<LibraryDashboard> {
   const repository = getWorkflowRepository();
+  const accountId = await getCurrentAccountId();
   await ensureDemoSeeded(repository);
-  const trackedSeason = await getWorkflowStatusView(repository);
+  const trackedSeason = await getWorkflowStatusView(repository, accountId);
   if (!trackedSeason) {
     throw new Error("No tracked seasons are available");
   }
-  const states = await repository.listTrackedSeasonStates();
+  const states = await repository.listTrackedSeasonStates(accountId);
   const byTitle = new Map<string, LibraryTitleSummary>();
   for (const state of states) {
     const entry = byTitle.get(state.title.id) ?? {
@@ -98,7 +100,7 @@ export async function getLibraryDashboard(): Promise<LibraryDashboard> {
     seasons: [...title.seasons].sort((a, b) => a.seasonNumber - b.seasonNumber),
   }));
   // The notice panel shows the real notification feed, not demo copy.
-  const notifications = await repository.listNotifications({ limit: 3 });
+  const notifications = await repository.listNotifications({ limit: 3, accountId });
   const dashboard = dashboardStateFromTrackedSeason(trackedSeason);
   if (notifications.length > 0) {
     dashboard.events = notifications.map((notification) => ({

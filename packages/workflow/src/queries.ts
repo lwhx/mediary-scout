@@ -35,8 +35,9 @@ export interface TrackedSeasonStatusView {
 export async function getTrackedSeasonStatusView(input: {
   repository: WorkflowRepository;
   trackedSeasonId: string;
+  accountId?: string;
 }): Promise<TrackedSeasonStatusView | null> {
-  const state = await input.repository.getTrackedSeasonState(input.trackedSeasonId);
+  const state = await input.repository.getTrackedSeasonState(input.trackedSeasonId, input.accountId);
   if (!state) {
     return null;
   }
