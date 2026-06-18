@@ -233,6 +233,11 @@ export class InMemoryWorkflowRepository implements WorkflowRepository {
       moviesCid: row.moviesCid ?? null,
       tvCid: row.tvCid ?? null,
       animeCid: row.animeCid ?? null,
+      // Mirror Postgres: ON CONFLICT refresh does NOT touch status, so a re-scan
+      // (refresh) keeps an existing frozen state until an explicit unfreeze.
+      status: existing?.status ?? "active",
+      frozenReason: existing?.frozenReason ?? null,
+      frozenAt: existing?.frozenAt ?? null,
       createdAt: row.createdAt,
     });
   }

@@ -141,6 +141,11 @@ const SCHEMA = `
   );
   ALTER TABLE tracked_seasons ADD COLUMN IF NOT EXISTS account_id text NOT NULL DEFAULT 'acct_default';
   ALTER TABLE workflow_runs ADD COLUMN IF NOT EXISTS account_id text NOT NULL DEFAULT 'acct_default';
+  ALTER TABLE tracked_seasons ADD COLUMN IF NOT EXISTS connected_storage_id text;
+  ALTER TABLE workflow_runs ADD COLUMN IF NOT EXISTS connected_storage_id text;
+  ALTER TABLE connected_storages ADD COLUMN IF NOT EXISTS status text NOT NULL DEFAULT 'active';
+  ALTER TABLE connected_storages ADD COLUMN IF NOT EXISTS frozen_reason text;
+  ALTER TABLE connected_storages ADD COLUMN IF NOT EXISTS frozen_at text;
   INSERT INTO accounts (id, username, password_hash, is_owner, created_at)
     VALUES ('acct_default', 'default', '', true, now()::text)
     ON CONFLICT (id) DO NOTHING;
@@ -565,7 +570,7 @@ export class PostgresWorkflowRepository implements WorkflowRepository {
   async listConnectedStorages(accountId: string): Promise<ConnectedStorage[]> {
     await this.ensureSchema();
     const result = await this.pool.query(
-      "SELECT id, account_id, provider, provider_uid, label, payload, root_cid, movies_cid, tv_cid, anime_cid, created_at " +
+      "SELECT id, account_id, provider, provider_uid, label, payload, root_cid, movies_cid, tv_cid, anime_cid, status, frozen_reason, frozen_at, created_at " +
         "FROM connected_storages WHERE account_id = $1 ORDER BY created_at",
       [accountId],
     );
@@ -609,7 +614,7 @@ export class PostgresWorkflowRepository implements WorkflowRepository {
   ): Promise<ConnectedStorage | null> {
     await this.ensureSchema();
     const result = await this.pool.query(
-      "SELECT id, account_id, provider, provider_uid, label, payload, root_cid, movies_cid, tv_cid, anime_cid, created_at " +
+      "SELECT id, account_id, provider, provider_uid, label, payload, root_cid, movies_cid, tv_cid, anime_cid, status, frozen_reason, frozen_at, created_at " +
         "FROM connected_storages WHERE provider = $1 AND provider_uid = $2",
       [provider, providerUid],
     );
@@ -1022,6 +1027,9 @@ function connectedStorageFromRow(row: Record<string, unknown>): ConnectedStorage
     moviesCid: (row.movies_cid as string | null | undefined) ?? null,
     tvCid: (row.tv_cid as string | null | undefined) ?? null,
     animeCid: (row.anime_cid as string | null | undefined) ?? null,
+    status: (row.status as "active" | "frozen" | null | undefined) ?? "active",
+    frozenReason: (row.frozen_reason as string | null | undefined) ?? null,
+    frozenAt: (row.frozen_at as string | null | undefined) ?? null,
     createdAt: String(row.created_at),
   };
 }

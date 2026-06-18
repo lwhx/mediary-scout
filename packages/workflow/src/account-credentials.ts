@@ -46,6 +46,12 @@ export interface ConnectedStorage {
   moviesCid: string | null;
   tvCid: string | null;
   animeCid: string | null;
+  /** active = usable; frozen = cookie died (e.g. logged in elsewhere) → no
+   *  acquisition and no patrol run for this drive until re-bound to the same uid.
+   *  Data is never lost while frozen. */
+  status: "active" | "frozen";
+  frozenReason: string | null;
+  frozenAt: string | null;
   createdAt: string;
 }
 
