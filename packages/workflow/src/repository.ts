@@ -178,6 +178,15 @@ export interface WorkflowRepository extends DeadLinkStore {
   upsertConnectedStorage(row: UpsertConnectedStorageInput): Promise<void>;
   /** Instance-wide lookup enforcing UNIQUE(provider, provider_uid) ownership. */
   findConnectedStorageByUid(provider: string, providerUid: string): Promise<ConnectedStorage | null>;
+  /** Set a drive's status. `frozen` (cookie died → no acquisition/patrol) carries
+   *  a reason + timestamp; `active` (re-bound/healthy) clears them. No-op if the
+   *  storage id is unknown. */
+  setConnectedStorageStatus(
+    storageId: string,
+    status: "active" | "frozen",
+    frozenReason: string | null,
+    frozenAt: string | null,
+  ): Promise<void>;
   /** Accounts + sessions (§7 P1 auth). createAccount throws on a duplicate
    *  username (UNIQUE), surfaced to the register route as "用户名已存在". */
   createAccount(account: Account): Promise<void>;
@@ -296,6 +305,20 @@ export class InMemoryWorkflowRepository implements WorkflowRepository {
   ): Promise<ConnectedStorage | null> {
     const found = this.connectedStorages.get(connectedStorageKey(provider, providerUid));
     return found ? { ...found } : null;
+  }
+
+  async setConnectedStorageStatus(
+    storageId: string,
+    status: "active" | "frozen",
+    frozenReason: string | null,
+    frozenAt: string | null,
+  ): Promise<void> {
+    for (const [key, storage] of this.connectedStorages) {
+      if (storage.id === storageId) {
+        this.connectedStorages.set(key, { ...storage, status, frozenReason, frozenAt });
+        return;
+      }
+    }
   }
 
   async createAccount(account: Account): Promise<void> {

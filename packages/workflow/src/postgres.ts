@@ -691,6 +691,19 @@ export class PostgresWorkflowRepository implements WorkflowRepository {
     return row ? connectedStorageFromRow(row) : null;
   }
 
+  async setConnectedStorageStatus(
+    storageId: string,
+    status: "active" | "frozen",
+    frozenReason: string | null,
+    frozenAt: string | null,
+  ): Promise<void> {
+    await this.ensureSchema();
+    await this.pool.query(
+      "UPDATE connected_storages SET status = $2, frozen_reason = $3, frozen_at = $4 WHERE id = $1",
+      [storageId, status, frozenReason, frozenAt],
+    );
+  }
+
   async createAccount(account: Account): Promise<void> {
     await this.ensureSchema();
     try {
