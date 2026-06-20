@@ -1,3 +1,4 @@
+import { isDemoMode } from "../../../../lib/demo-mode";
 import { NextResponse, type NextRequest } from "next/server";
 import {
   SESSION_COOKIE_NAME,
@@ -9,6 +10,7 @@ const SESSION_MAX_AGE = 30 * 24 * 60 * 60; // 30 days, seconds
 
 /** Register a local account → auto-login (set the session cookie). */
 export async function POST(request: NextRequest) {
+  if (isDemoMode()) return Response.json({ error: "演示站只读" }, { status: 403 });
   if (!isMultiUserEnabled()) {
     return NextResponse.json({ error: "multi-user disabled" }, { status: 404 });
   }

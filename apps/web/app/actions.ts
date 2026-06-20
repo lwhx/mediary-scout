@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { queueCandidateSeries, queueCandidateTracking, reserveCandidate } from "../lib/workflow-runtime";
+import { assertNotDemo } from "../lib/demo-mode";
 
 export interface TestStorageConnectionResult {
   ok: boolean;
@@ -14,6 +15,7 @@ export interface TestStorageConnectionResult {
 export async function testStorageConnectionAction(
   storageId: string,
 ): Promise<TestStorageConnectionResult> {
+  assertNotDemo();
   const { testConnection, getCurrentAccountId } = await import("../lib/workflow-runtime");
   const result = await testConnection(await getCurrentAccountId(), storageId);
   revalidatePath("/settings");
@@ -29,6 +31,7 @@ export interface UnbindStorageActionResult {
  *  drive + drops its cookie), keeping tracking data so re-binding the same drive
  *  restores it. Refused while the drive has an in-flight acquisition. */
 export async function unbindStorageAction(storageId: string): Promise<UnbindStorageActionResult> {
+  assertNotDemo();
   const { getCurrentAccountId, getWorkflowRepository } = await import("../lib/workflow-runtime");
   const accountId = await getCurrentAccountId();
   const repository = getWorkflowRepository();
@@ -59,6 +62,7 @@ export interface ConnectQuarkActionResult {
 
 /** Settings "添加网盘 → 夸克": bind a pasted 夸克 cookie as a new drive. */
 export async function connectQuarkAction(cookie: string): Promise<ConnectQuarkActionResult> {
+  assertNotDemo();
   try {
     const { connectQuarkCookie } = await import("../lib/workflow-runtime");
     const { providerUid } = await connectQuarkCookie(cookie);
@@ -80,6 +84,7 @@ export async function requestTrackingAction(input?: {
   /** Tree model: the active workspace drive — acquisition lands HERE, not the primary. */
   storageId?: string;
 }): Promise<RequestTrackingActionResult> {
+  assertNotDemo();
   if (input?.currentState === "already_tracked") {
     return {
       status: "already_tracked",
@@ -155,6 +160,7 @@ export async function requestSeriesAction(input: {
   candidateId: string;
   storageId?: string;
 }): Promise<RequestTrackingActionResult> {
+  assertNotDemo();
   const request = await queueCandidateSeries(input.candidateId, input.storageId);
   if (request.status === "already_tracked") {
     return { status: "already_tracked", message: "全剧已追踪，后台会继续按缺集状态检查。" };
@@ -179,6 +185,7 @@ export async function importForeignWorkAction(input: {
   movieTitle: string;
   year: number;
 }): Promise<ForeignWorkImportActionResult> {
+  assertNotDemo();
   const movieTitle = input.movieTitle.trim();
   const year = Number(input.year);
   if (!movieTitle || !Number.isInteger(year) || year < 1880 || year > 2100) {
@@ -209,6 +216,7 @@ export async function requestSeasonAction(input: {
   seasonNumber: number;
   storageId?: string;
 }): Promise<RequestTrackingActionResult> {
+  assertNotDemo();
   const { queueSeasonTracking } = await import("../lib/title-hub");
   const request = await queueSeasonTracking(input.tmdbId, input.seasonNumber, input.storageId);
   if (request.status === "already_tracked") {
@@ -229,6 +237,7 @@ export async function requestRemainingAction(input: {
   tmdbId: number;
   storageId?: string;
 }): Promise<RequestTrackingActionResult> {
+  assertNotDemo();
   const { queueRemainingSeasons } = await import("../lib/title-hub");
   const request = await queueRemainingSeasons(input.tmdbId, input.storageId);
   if (request.status === "already_tracked") {
@@ -254,6 +263,7 @@ export interface PushSettingsActionResult {
 export async function savePushSettingsAction(
   settings: Record<string, string>,
 ): Promise<PushSettingsActionResult> {
+  assertNotDemo();
   try {
     const { getWorkflowRepository, getCurrentAccountId } = await import("../lib/workflow-runtime");
     const repository = getWorkflowRepository();
@@ -285,6 +295,7 @@ const PUSH_CHANNEL_KEYS = ["bark", "serverchan", "wecom", "webhook"] as const;
  * affordance. Storing "" makes the channel read back as unconfigured.
  */
 export async function clearPushChannelAction(key: string): Promise<PushSettingsActionResult> {
+  assertNotDemo();
   if (!(PUSH_CHANNEL_KEYS as readonly string[]).includes(key)) {
     return { success: false, message: "未知的推送渠道" };
   }
@@ -298,6 +309,7 @@ export async function clearPushChannelAction(key: string): Promise<PushSettingsA
 }
 
 export async function saveDailySweepTimeAction(time: string): Promise<PushSettingsActionResult> {
+  assertNotDemo();
   if (!/^\d{2}:\d{2}$/.test(time)) {
     return { success: false, message: "时间格式应为 HH:MM" };
   }
@@ -317,6 +329,7 @@ export async function saveDailySweepTimeAction(time: string): Promise<PushSettin
 export async function savePreferredLanguageAction(
   language: string,
 ): Promise<PushSettingsActionResult> {
+  assertNotDemo();
   try {
     const { getWorkflowRepository, getCurrentAccountId, PREFERRED_LANGUAGE_SETTING_KEY } = await import(
       "../lib/workflow-runtime"
@@ -332,6 +345,7 @@ export async function savePreferredLanguageAction(
 export async function saveQualityPreferenceAction(
   quality: string,
 ): Promise<PushSettingsActionResult> {
+  assertNotDemo();
   try {
     const { getWorkflowRepository, getCurrentAccountId, QUALITY_PREFERENCE_SETTING_KEY } = await import(
       "../lib/workflow-runtime"
@@ -349,6 +363,7 @@ export async function saveLlmConfigAction(input: {
   modelId: string;
   apiKey: string;
 }): Promise<PushSettingsActionResult> {
+  assertNotDemo();
   try {
     const {
       getWorkflowRepository,
@@ -374,6 +389,7 @@ export async function saveLlmConfigAction(input: {
 }
 
 export async function saveTmdbApiKeyAction(apiKey: string): Promise<PushSettingsActionResult> {
+  assertNotDemo();
   try {
     const { getWorkflowRepository, getCurrentAccountId, TMDB_API_KEY_SETTING_KEY } = await import("../lib/workflow-runtime");
     const repository = getWorkflowRepository();
@@ -389,6 +405,7 @@ export async function saveTmdbApiKeyAction(apiKey: string): Promise<PushSettings
 }
 
 export async function clearTmdbApiKeyAction(): Promise<PushSettingsActionResult> {
+  assertNotDemo();
   try {
     const { getWorkflowRepository, getCurrentAccountId, TMDB_API_KEY_SETTING_KEY } = await import("../lib/workflow-runtime");
     await getWorkflowRepository().setAccountSetting(await getCurrentAccountId(), TMDB_API_KEY_SETTING_KEY, "");
@@ -399,6 +416,7 @@ export async function clearTmdbApiKeyAction(): Promise<PushSettingsActionResult>
 }
 
 export async function savePanSouBaseUrlAction(baseURL: string): Promise<PushSettingsActionResult> {
+  assertNotDemo();
   try {
     const { getWorkflowRepository, getCurrentAccountId, PANSOU_BASE_URL_SETTING_KEY } = await import("../lib/workflow-runtime");
     // Empty = clear the override → falls back to env / public default.
@@ -413,6 +431,7 @@ export async function saveProwlarrConfigAction(input: {
   baseURL: string;
   apiKey: string;
 }): Promise<PushSettingsActionResult> {
+  assertNotDemo();
   try {
     const { getWorkflowRepository, getCurrentAccountId, PROWLARR_BASE_URL_SETTING_KEY, PROWLARR_API_KEY_SETTING_KEY } = await import(
       "../lib/workflow-runtime"
@@ -431,6 +450,7 @@ export async function saveProwlarrConfigAction(input: {
 }
 
 export async function clearProwlarrConfigAction(): Promise<PushSettingsActionResult> {
+  assertNotDemo();
   try {
     const { getWorkflowRepository, getCurrentAccountId, PROWLARR_BASE_URL_SETTING_KEY, PROWLARR_API_KEY_SETTING_KEY } = await import(
       "../lib/workflow-runtime"
@@ -448,6 +468,7 @@ export async function clearProwlarrConfigAction(): Promise<PushSettingsActionRes
 export async function testPushNotificationAction(
   settings: Record<string, string>,
 ): Promise<PushSettingsActionResult> {
+  assertNotDemo();
   try {
     const { sendPushNotifications } = await import("@media-track/workflow");
     const { getAccountScopedSettings, getCurrentAccountId } = await import("../lib/workflow-runtime");

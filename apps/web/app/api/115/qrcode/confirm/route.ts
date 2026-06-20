@@ -1,7 +1,9 @@
+import { isDemoMode } from "../../../../../lib/demo-mode";
 import { NextResponse, type NextRequest } from "next/server";
 import { completePan115QrLogin } from "../../../../../lib/workflow-runtime";
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
+  if (isDemoMode()) return NextResponse.json({ error: "演示站只读" }, { status: 403 });
   try {
     const body = (await request.json()) as {
       session?: { uid?: string; time?: number; sign?: string };

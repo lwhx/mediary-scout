@@ -1,3 +1,4 @@
+import { isDemoMode } from "../../../../lib/demo-mode";
 import { NextResponse, type NextRequest } from "next/server";
 import { getCurrentAccountId, getWorkflowRepository } from "../../../../lib/workflow-runtime";
 
@@ -8,6 +9,7 @@ import { getCurrentAccountId, getWorkflowRepository } from "../../../../lib/work
  * already claimed it (the UI then refreshes to show it running).
  */
 export async function POST(request: NextRequest) {
+  if (isDemoMode()) return Response.json({ error: "演示站只读" }, { status: 403 });
   const body = (await request.json().catch(() => ({}))) as { runId?: unknown };
   const runId = typeof body.runId === "string" ? body.runId : null;
   if (!runId) {
