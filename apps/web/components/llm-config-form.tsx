@@ -3,6 +3,7 @@
 import { useState, useTransition } from "react";
 import { Check, LoaderCircle } from "lucide-react";
 import { saveLlmConfigAction } from "../app/actions";
+import { LlmTestConnectionButton } from "./llm-test-connection-button";
 
 export function LlmConfigForm({
   baseURL: initialBaseURL,
@@ -24,9 +25,9 @@ export function LlmConfigForm({
   const handleSave = () => {
     startTransition(async () => {
       const res = await saveLlmConfigAction({ baseURL, modelId, apiKey });
-      setResult(res.success ? "✅ 保存成功" : `❌ ${res.message ?? "保存失败"}`);
+      setResult(res.success ? "✅ 保存成功 —— 点「测试连接」确认可用" : `❌ ${res.message ?? "保存失败"}`);
       if (res.success) setApiKey("");
-      setTimeout(() => setResult(null), 3000);
+      setTimeout(() => setResult(null), 4000);
     });
   };
 
@@ -69,11 +70,12 @@ export function LlmConfigForm({
           autoComplete="off"
         />
       </div>
-      <div className="setting-row" style={{ marginTop: 4 }}>
+      <div className="setting-row" style={{ marginTop: 4, gap: 12, flexWrap: "wrap" }}>
         <button type="button" className="primary-button" onClick={handleSave} disabled={isPending}>
           {isPending ? <LoaderCircle size={14} className="spin" aria-hidden /> : <Check size={14} aria-hidden />}
           保存
         </button>
+        <LlmTestConnectionButton />
         {result ? <span className="panel-note">{result}</span> : null}
       </div>
     </div>
