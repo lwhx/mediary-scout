@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  createAgentModel,
   createAgentProviderConfig,
   createAgentModelFromEnv,
+  llmConfigError,
   normalizeLlmBaseUrl,
   sanitizeLlmApiKey,
 } from "../src/agent-model.js";
@@ -12,36 +14,150 @@ import {
  * calls createAgentModelFromEnv for every real (vercel-ai) run, and the §6a
  * interrogation script uses it. Losing it breaks live e2e at runtime even though
  * tsc stayed green (the web typechecked against a stale dist .d.ts).
+ *
+ * BYO model: the factory is model-AGNOSTIC. baseURL + modelId are REQUIRED;
+ * apiKey is OPTIONAL (keyless local LLMs — ollama/LM Studio — are valid). There
+ * is NO silent MiMo default (issue #49).
  */
-describe("agent-model — the live OpenAI-compatible (MiMo) LanguageModel factory", () => {
-  it("maps options to provider settings with the MiMo defaults", () => {
-    const { providerSettings, modelId } = createAgentProviderConfig({});
-    expect(modelId).toBe("mimo-v2.5-pro");
-    expect(providerSettings.name).toBe("agent-model");
-    expect(providerSettings.baseURL).toBe("https://token-plan-sgp.xiaomimimo.com/v1");
-  });
-
-  it("honors explicit apiKey / baseURL / modelId overrides", () => {
+describe("agent-model — the live OpenAI-compatible (BYO) LanguageModel factory", () => {
+  it("maps explicit options onto provider settings (no invented defaults)", () => {
     const { providerSettings, modelId } = createAgentProviderConfig({
-      apiKey: "secret",
       baseURL: "https://example.test/v1",
       modelId: "custom-model",
     });
     expect(modelId).toBe("custom-model");
+    expect(providerSettings.name).toBe("agent-model");
     expect(providerSettings.baseURL).toBe("https://example.test/v1");
+  });
+
+  // #49 real root cause: the key must go out BOTH ways. Standard OpenAI-compatible
+  // providers (DeepSeek/OpenAI/Groq/OpenRouter) authenticate via
+  // `Authorization: Bearer <key>`, which @ai-sdk/openai-compatible emits ONLY from
+  // the provider's `apiKey` field — they IGNORE the `api-key` header. MiMo/Azure
+  // read the `api-key` header. Sending both = universal compatibility.
+  it("sends the key BOTH ways when apiKey is set (apiKey→Bearer AND api-key header)", () => {
+    const { providerSettings } = createAgentProviderConfig({
+      apiKey: "secret",
+      baseURL: "https://example.test/v1",
+      modelId: "custom-model",
+    });
+    expect(providerSettings.apiKey).toBe("secret");
     expect(providerSettings.headers).toEqual({ "api-key": "secret" });
   });
 
-  it("builds a model from AGENT_MODEL_* env (XIAOMI_MIMO_* as fallback)", () => {
+  it("omits BOTH apiKey and headers for a keyless local LLM", () => {
+    const { providerSettings } = createAgentProviderConfig({
+      baseURL: "http://localhost:11434/v1",
+      modelId: "qwen2.5",
+    });
+    expect(providerSettings.apiKey).toBeUndefined();
+    expect(providerSettings.headers).toBeUndefined();
+  });
+
+  // C1 (Copilot #51): a blank/whitespace apiKey (e.g. AGENT_MODEL_API_KEY= in
+  // .env) must NOT send a key at all — neither Bearer nor `api-key: ""` — that
+  // breaks keyless local LLMs with an avoidable 401.
+  it("omits BOTH apiKey and headers for an EMPTY-STRING apiKey (keyless)", () => {
+    const { providerSettings } = createAgentProviderConfig({
+      apiKey: "",
+      baseURL: "http://localhost:11434/v1",
+      modelId: "qwen2.5",
+    });
+    expect(providerSettings.apiKey).toBeUndefined();
+    expect(providerSettings.headers).toBeUndefined();
+  });
+
+  it("omits BOTH apiKey and headers for a whitespace-only apiKey (keyless)", () => {
+    const { providerSettings } = createAgentProviderConfig({
+      apiKey: "   ",
+      baseURL: "http://localhost:11434/v1",
+      modelId: "qwen2.5",
+    });
+    expect(providerSettings.apiKey).toBeUndefined();
+    expect(providerSettings.headers).toBeUndefined();
+  });
+
+  it("trims the key (both Bearer + header), baseURL and modelId before building provider settings", () => {
+    const { providerSettings, modelId } = createAgentProviderConfig({
+      apiKey: "  secret  ",
+      baseURL: "  https://example.test/v1  ",
+      modelId: "  custom-model  ",
+    });
+    expect(providerSettings.apiKey).toBe("secret");
+    expect(providerSettings.headers).toEqual({ "api-key": "secret" });
+    expect(providerSettings.baseURL).toBe("https://example.test/v1");
+    expect(modelId).toBe("custom-model");
+  });
+
+  it("throws an agnostic error (no MiMo) when baseURL is missing", () => {
+    expect(() => createAgentProviderConfig({ modelId: "x" })).toThrow();
+    try {
+      createAgentProviderConfig({ modelId: "x" });
+    } catch (error) {
+      expect((error as Error).message.toLowerCase()).not.toContain("mimo");
+    }
+  });
+
+  it("throws an agnostic error when modelId is missing", () => {
+    expect(() => createAgentModel({ baseURL: "https://example.test/v1" })).toThrow();
+  });
+
+  it("builds a model from AGENT_MODEL_* env", () => {
     const model = createAgentModelFromEnv({
       AGENT_MODEL_API_KEY: "k",
-      AGENT_MODEL_ID: "mimo-v2.5-pro",
+      AGENT_MODEL_BASE_URL: "https://example.test/v1",
+      AGENT_MODEL_ID: "some-model",
     } as NodeJS.ProcessEnv);
     expect(model).toBeDefined();
-    expect((model as { modelId?: string }).modelId).toBe("mimo-v2.5-pro");
+    expect((model as { modelId?: string }).modelId).toBe("some-model");
+  });
 
-    const fallback = createAgentModelFromEnv({ XIAOMI_MIMO_API_KEY: "k2" } as NodeJS.ProcessEnv);
+  it("still reads the XIAOMI_MIMO_* env fallback (back-compat for existing instances)", () => {
+    const fallback = createAgentModelFromEnv({
+      XIAOMI_MIMO_API_KEY: "k2",
+      XIAOMI_MIMO_BASE_URL: "https://token-plan-sgp.xiaomimimo.com/v1",
+      XIAOMI_MIMO_MODEL_ID: "mimo-v2.5-pro",
+    } as NodeJS.ProcessEnv);
     expect((fallback as { modelId?: string }).modelId).toBe("mimo-v2.5-pro");
+  });
+
+  it("throws (no silent default) when env configures nothing", () => {
+    expect(() => createAgentModelFromEnv({} as NodeJS.ProcessEnv)).toThrow();
+  });
+});
+
+describe("llmConfigError — agnostic, BYO required-config predicate", () => {
+  it("flags a missing baseURL", () => {
+    expect(llmConfigError({ modelId: "x" })).not.toBeNull();
+  });
+
+  it("flags a blank baseURL", () => {
+    expect(llmConfigError({ baseURL: "  ", modelId: "x" })).not.toBeNull();
+  });
+
+  it("flags a missing modelId", () => {
+    expect(llmConfigError({ baseURL: "https://x/v1" })).not.toBeNull();
+  });
+
+  it("returns null when baseURL + modelId are present and no apiKey (keyless local LLM OK)", () => {
+    expect(llmConfigError({ baseURL: "http://localhost:11434/v1", modelId: "qwen" })).toBeNull();
+  });
+
+  it("returns null when all three are present", () => {
+    expect(
+      llmConfigError({ apiKey: "sk-x", baseURL: "https://x/v1", modelId: "gpt-4o" }),
+    ).toBeNull();
+  });
+
+  it("never mentions MiMo in the message", () => {
+    expect((llmConfigError({}) ?? "").toLowerCase()).not.toContain("mimo");
+  });
+
+  // C2 (Copilot #51): clean, user-facing wording.
+  it("uses the approved cleaned-up wording", () => {
+    expect(llmConfigError({})).toBe(
+      "未配置 AI 模型。请到「设置 → AI 模型」填写 Base URL 和模型名(任意 OpenAI 兼容服务,自带);云端服务还需 API Key,本地模型可留空。",
+    );
   });
 });
 
