@@ -1,9 +1,10 @@
-import { NextResponse, type NextRequest } from "next/server";
+import { connection, NextResponse, type NextRequest } from "next/server";
 import { agentApiGuard } from "../../../../lib/agent-api/guard";
 import { getOwnerAccountId } from "../../../../lib/agent-api/owner";
 import { getWorkflowRepository, notificationWindowSince } from "../../../../lib/workflow-runtime";
 
 export async function GET(request: NextRequest) {
+  await connection();
   const denied = await agentApiGuard(request);
   if (denied) {
     return denied;

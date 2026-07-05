@@ -1,10 +1,11 @@
-import { NextResponse, type NextRequest } from "next/server";
+import { connection, NextResponse, type NextRequest } from "next/server";
 import { agentApiGuard } from "../../../../lib/agent-api/guard";
 import { acquireMedia, type AcquireInput } from "../../../../lib/agent-api/acquire";
 import { assertNotDemoFromEnv } from "../../../../lib/demo-mode";
 import { getOwnerAccountId } from "../../../../lib/agent-api/owner";
 
 export async function POST(request: NextRequest) {
+  await connection();
   const denied = await agentApiGuard(request);
   if (denied) {
     return denied;

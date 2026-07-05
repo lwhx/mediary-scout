@@ -1,9 +1,10 @@
-import { NextResponse, type NextRequest } from "next/server";
+import { connection, NextResponse, type NextRequest } from "next/server";
 import { agentApiGuard } from "../../../../lib/agent-api/guard";
 import { assertNotDemoFromEnv } from "../../../../lib/demo-mode";
 import { runScheduledType3 } from "../../../../lib/workflow-runtime";
 
 export async function POST(request: NextRequest) {
+  await connection();
   const denied = await agentApiGuard(request);
   if (denied) {
     return denied;

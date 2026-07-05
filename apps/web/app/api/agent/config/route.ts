@@ -1,10 +1,11 @@
-import { NextResponse, type NextRequest } from "next/server";
+import { connection, NextResponse, type NextRequest } from "next/server";
 import { agentApiGuard } from "../../../../lib/agent-api/guard";
 import { readAgentConfig, writeAgentConfig, type AgentConfigWriteInput } from "../../../../lib/agent-api/config-io";
 import { assertNotDemoFromEnv } from "../../../../lib/demo-mode";
 import { getOwnerAccountId } from "../../../../lib/agent-api/owner";
 
 export async function GET(request: NextRequest) {
+  await connection();
   const denied = await agentApiGuard(request);
   if (denied) {
     return denied;
@@ -15,6 +16,7 @@ export async function GET(request: NextRequest) {
 }
 
 export async function PUT(request: NextRequest) {
+  await connection();
   const denied = await agentApiGuard(request);
   if (denied) {
     return denied;
