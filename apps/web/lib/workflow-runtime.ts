@@ -36,6 +36,7 @@ import {
   runScheduledType3Monitoring,
   sendPushNotifications,
   createPostgresWorkflowRepositorySync,
+  createSqliteWorkflowRepository,
   migrateLegacyCookieToDefaultAccount,
   resolveStorageBinding,
   provisionCategoryDirs,
@@ -111,7 +112,14 @@ export function postgresConnectionString(): string {
 
 export function getWorkflowRepository(): WorkflowRepository {
   if (!repository) {
-    repository = createPostgresWorkflowRepositorySync({ connectionString: postgresConnectionString() });
+    // Desktop build: a MEDIA_TRACK_SQLITE_PATH selects the bundled SQLite repo so
+    // the app runs with no Postgres. Checked BEFORE postgresConnectionString(),
+    // which throws when MEDIA_TRACK_POSTGRES_URL is unset. Container/prod is
+    // unchanged: without the SQLite path, it still resolves the Postgres repo.
+    const sqlitePath = process.env.MEDIA_TRACK_SQLITE_PATH?.trim();
+    repository = sqlitePath
+      ? createSqliteWorkflowRepository({ path: sqlitePath })
+      : createPostgresWorkflowRepositorySync({ connectionString: postgresConnectionString() });
   }
   return repository;
 }
@@ -1149,7 +1157,10 @@ function beijingDateTime(): { date: string; hhmm: string } {
  * regardless of how often the trigger fires. `force` bypasses the gate for
  * on-demand "sweep now".
  */
-export async function runScheduledType3(options?: { force?: boolean }): Promise<{
+export async function runScheduledType3(options?: {
+  force?: boolean;
+  ignoreTimeGate?: boolean;
+}): Promise<{
   outcomes: Awaited<ReturnType<typeof runScheduledType3Monitoring>>;
   skipped?: "already_swept_today" | "before_scheduled_time";
   scheduledFor?: string;
@@ -1163,7 +1174,11 @@ export async function runScheduledType3(options?: { force?: boolean }): Promise<
     if (date === lastDate) {
       return { skipped: "already_swept_today", outcomes: [] };
     }
-    if (hhmm < target) {
+    // Desktop's "first open of the day" trigger passes ignoreTimeGate to bypass
+    // ONLY this wall-clock guard — the once-per-day guard above still holds, so
+    // the sweep stays idempotent within a Beijing day. Container/prod never set
+    // the flag, so the configured sweep time remains authoritative there.
+    if (!options?.ignoreTimeGate && hhmm < target) {
       return { skipped: "before_scheduled_time", scheduledFor: target, outcomes: [] };
     }
     // Claim the day BEFORE running, so a second near-simultaneous trigger no-ops

@@ -419,10 +419,31 @@ export class PostgresWorkflowRepository implements WorkflowRepository {
         ? undefined
         : { accountId: input.accountId, connectedStorageId: input.connectedStorageId ?? null },
     );
-    const latest = (await this.selectWorkflowRunsForAccount(this.pool, input.trackedSeasonId, scope.accountId))
-      .filter((workflowRun) => workflowRun.kind === input.kind && isActiveWorkflowStatus(workflowRun.status))
+    await this.ensureSchema();
+    // Scope-filter (account + storage) BEFORE picking the latest: with drive-independent
+    // season ids the same season can be active on multiple drives, so taking the latest
+    // across all drives and THEN dropping cross-storage could return null even though a
+    // scoped active run exists on an older drive. Mirror the InMemory oracle.
+    const result = await this.pool.query<{
+      payload: WorkflowRun;
+      account_id: string;
+      connected_storage_id: string | null;
+    }>(
+      "SELECT payload, account_id, connected_storage_id FROM workflow_runs WHERE tracked_season_id = $1 AND account_id = $2",
+      [input.trackedSeasonId, scope.accountId],
+    );
+    const latest = result.rows
+      .filter((row) => {
+        const rawStorage = row.connected_storage_id ?? null;
+        const storage = rawStorage === UNSCOPED_STORAGE ? null : rawStorage;
+        return (
+          scopeMatches(scope, row.account_id ?? DEFAULT_ACCOUNT_ID, storage) &&
+          row.payload.kind === input.kind &&
+          isActiveWorkflowStatus(row.payload.status)
+        );
+      })
+      .map((row) => row.payload)
       .sort((a, b) => b.startedAt.localeCompare(a.startedAt))[0];
-    // getWorkflowRunSnapshot applies the storage filter (drops cross-storage).
     return latest ? this.getWorkflowRunSnapshot(latest.id, scope) : null;
   }
 
@@ -813,11 +834,16 @@ export class PostgresWorkflowRepository implements WorkflowRepository {
       "SELECT n.payload AS payload, wr.account_id AS account_id, wr.connected_storage_id AS connected_storage_id FROM notifications n " +
         "JOIN workflow_runs wr ON n.workflow_run_id = wr.id",
     );
-    const rows = result.rows.map((row) => ({
-      accountId: (row.account_id as string | undefined) ?? DEFAULT_ACCOUNT_ID,
-      connectedStorageId: (row.connected_storage_id as string | null | undefined) ?? null,
-      notification: row.payload as NotificationEvent,
-    }));
+    const rows = result.rows.map((row) => {
+      const rawStorage = (row.connected_storage_id as string | null | undefined) ?? null;
+      return {
+        accountId: (row.account_id as string | undefined) ?? DEFAULT_ACCOUNT_ID,
+        // Collapse the internal sentinel back to null, same as loadWorkflowRunSnapshot:
+        // callers must never observe UNSCOPED_STORAGE.
+        connectedStorageId: rawStorage === UNSCOPED_STORAGE ? null : rawStorage,
+        notification: row.payload as NotificationEvent,
+      };
+    });
     rows.sort((left, right) => right.notification.createdAt.localeCompare(left.notification.createdAt));
     return rows.slice(0, input?.limit ?? 100);
   }
@@ -1125,12 +1151,20 @@ export class PostgresWorkflowRepository implements WorkflowRepository {
       return null;
     }
     const accountId = (runRow.rows[0]?.account_id as string | undefined) ?? DEFAULT_ACCOUNT_ID;
-    const connectedStorageId =
-      (runRow.rows[0]?.connected_storage_id as string | null | undefined) ?? null;
+    // Collapse the UNSCOPED_STORAGE sentinel back to null for the domain snapshot — the
+    // sentinel is an internal NOT-NULL detail and must never leak into connectedStorageId
+    // (matches SQLite + InMemory). The season/episode lookups below re-collapse via
+    // `?? UNSCOPED_STORAGE`, so scoping stays correct.
+    const rawStorage = (runRow.rows[0]?.connected_storage_id as string | null | undefined) ?? null;
+    const connectedStorageId = rawStorage === UNSCOPED_STORAGE ? null : rawStorage;
+    // Scope the season to THIS run's drive: tracked_seasons PK is
+    // (id, connected_storage_id), so the same season id can exist on multiple drives
+    // with different per-drive payloads (storageDirectoryId, totals, status). Loading
+    // by id alone could hydrate the wrong drive's season and break cross-drive isolation.
     const season = await this.selectOne<TrackedSeason>(
       executor,
-      "SELECT payload FROM tracked_seasons WHERE id = $1",
-      [workflowRun.trackedSeasonId],
+      "SELECT payload FROM tracked_seasons WHERE id = $1 AND connected_storage_id = $2",
+      [workflowRun.trackedSeasonId, connectedStorageId ?? UNSCOPED_STORAGE],
     );
     if (!season) {
       throw new Error(`Missing tracked season ${workflowRun.trackedSeasonId} for workflow run ${workflowRun.id}`);
@@ -1170,8 +1204,22 @@ export class PostgresWorkflowRepository implements WorkflowRepository {
     client: PoolClient,
     snapshot: PersistWorkflowRunSnapshotInput,
   ): Promise<void> {
-    const accountId = snapshot.accountId ?? DEFAULT_ACCOUNT_ID;
-    const connectedStorageId = snapshot.connectedStorageId ?? UNSCOPED_STORAGE;
+    // A re-persist may omit accountId/connectedStorageId (the worker finalize path
+    // doesn't re-thread them). upsertWorkflowRun preserves the stored values on
+    // conflict, but the season upsert + episode bucket delete/insert key on
+    // (id, connected_storage_id) — falling back to the unscoped sentinel would write
+    // those into a DIFFERENT bucket than reads resolve, silently dropping the update.
+    // Resolve the run's stored scope first (mirrors the InMemory oracle).
+    const existing = await client.query<{
+      account_id: string | null;
+      connected_storage_id: string | null;
+    }>("SELECT account_id, connected_storage_id FROM workflow_runs WHERE id = $1", [
+      snapshot.workflowRun.id,
+    ]);
+    const accountId =
+      snapshot.accountId ?? existing.rows[0]?.account_id ?? DEFAULT_ACCOUNT_ID;
+    const connectedStorageId =
+      snapshot.connectedStorageId ?? existing.rows[0]?.connected_storage_id ?? UNSCOPED_STORAGE;
     await this.upsert(client, "media_titles", "(id, payload)", [snapshot.title.id, json(snapshot.title)], "$1, $2::jsonb");
     await this.upsertTrackedSeason(client, snapshot.season, accountId, connectedStorageId);
     await this.upsertWorkflowRun(client, snapshot.workflowRun, accountId, connectedStorageId);
@@ -1339,18 +1387,6 @@ export class PostgresWorkflowRepository implements WorkflowRepository {
       "SELECT payload FROM workflow_runs WHERE tracked_season_id = $1 " +
         "AND ($2::text IS NULL OR connected_storage_id = $2)",
       [trackedSeasonId, connectedStorageId],
-    );
-  }
-
-  private async selectWorkflowRunsForAccount(
-    executor: Queryable,
-    trackedSeasonId: string,
-    accountId: string,
-  ): Promise<WorkflowRun[]> {
-    return this.selectMany<WorkflowRun>(
-      executor,
-      "SELECT payload FROM workflow_runs WHERE tracked_season_id = $1 AND account_id = $2",
-      [trackedSeasonId, accountId],
     );
   }
 

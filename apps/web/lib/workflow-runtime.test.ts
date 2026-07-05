@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   acquireLlmPreflightError,
   customDirNamesFromEnv,
@@ -266,6 +266,72 @@ describe("isCookieSecure (the LAN/HTTP login-bounce fix, #60)", () => {
 
   it("auto: x-forwarded-proto http with a colon (http:) → insecure", () => {
     expect(isCookieSecure(req({ xfp: "http:", protocol: "http:" }))).toBe(false);
+  });
+});
+
+describe("getWorkflowRepository (desktop SQLite selection)", () => {
+  it("selects the SQLite repository when MEDIA_TRACK_SQLITE_PATH is set", async () => {
+    const prevPg = process.env.MEDIA_TRACK_POSTGRES_URL;
+    process.env.MEDIA_TRACK_SQLITE_PATH = ":memory:";
+    delete process.env.MEDIA_TRACK_POSTGRES_URL;
+    vi.resetModules();
+    try {
+      const { getWorkflowRepository } = await import("./workflow-runtime");
+      expect(getWorkflowRepository().constructor.name).toBe("SqliteWorkflowRepository");
+    } finally {
+      delete process.env.MEDIA_TRACK_SQLITE_PATH;
+      if (prevPg !== undefined) process.env.MEDIA_TRACK_POSTGRES_URL = prevPg;
+      vi.resetModules();
+    }
+  });
+});
+
+describe("runScheduledType3 (ignoreTimeGate — desktop first-open-of-the-day patrol)", () => {
+  // The desktop app must run the daily sweep on the first tick of a new day
+  // regardless of wall-clock time (ignoreTimeGate), while STILL running at most
+  // once per Beijing day. Container/prod keep the wall-clock gate (flag unset).
+  // Harness: an in-memory SQLite repo (real getSetting/setSetting so the day-claim
+  // is exercised for real) + a stubbed runScheduledType3Monitoring so no real
+  // drive/agent/model is needed. daily_sweep_time is pinned to "23:59" so the
+  // wall-clock gate WOULD fire regardless of when this test runs.
+  it("runs before the scheduled time but still respects once-per-day", async () => {
+    const prevPg = process.env.MEDIA_TRACK_POSTGRES_URL;
+    process.env.MEDIA_TRACK_SQLITE_PATH = ":memory:";
+    delete process.env.MEDIA_TRACK_POSTGRES_URL;
+    // Freeze the clock (Date only) at a fixed mid-day Beijing instant so beijingDateTime()
+    // returns a STABLE date for both calls — otherwise the test can flake across Beijing
+    // midnight (the two calls seeing different dates would break once-per-day). 04:00 UTC =
+    // 12:00 Beijing, safely < the pinned 23:59 sweep time so the wall-clock gate still applies.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-07-05T04:00:00.000Z"));
+    vi.resetModules();
+    const monitor = vi.fn(async () => []);
+    vi.doMock("@media-track/workflow", async () => {
+      const actual = await vi.importActual<typeof import("@media-track/workflow")>("@media-track/workflow");
+      return { ...actual, runScheduledType3Monitoring: monitor };
+    });
+    try {
+      const { runScheduledType3, getWorkflowRepository, DAILY_SWEEP_TIME_SETTING_KEY } = await import(
+        "./workflow-runtime"
+      );
+      // Pin the sweep time to the very end of the day so the wall-clock gate WOULD
+      // block a plain call regardless of the actual time this test runs.
+      await getWorkflowRepository().setSetting(DAILY_SWEEP_TIME_SETTING_KEY, "23:59");
+
+      const first = await runScheduledType3({ ignoreTimeGate: true });
+      expect(first.skipped).toBeUndefined(); // ran despite before-time
+      expect(monitor).toHaveBeenCalledTimes(1);
+
+      const second = await runScheduledType3({ ignoreTimeGate: true });
+      expect(second.skipped).toBe("already_swept_today"); // day gate still holds
+      expect(monitor).toHaveBeenCalledTimes(1); // not run a second time today
+    } finally {
+      delete process.env.MEDIA_TRACK_SQLITE_PATH;
+      if (prevPg !== undefined) process.env.MEDIA_TRACK_POSTGRES_URL = prevPg;
+      vi.useRealTimers();
+      vi.doUnmock("@media-track/workflow");
+      vi.resetModules();
+    }
   });
 });
 
