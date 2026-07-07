@@ -10,6 +10,8 @@ import type { AssrtCandidate, AssrtSubtitleFile, AssrtProviderPort } from "../su
 import type { ResourceProviderV2, ResourceSnapshotV2 } from "./fake-provider.js";
 import type { SimTreeFile, StorageV2, TransferAttemptResult } from "./storage-115-simulator.js";
 import { isSystemicTransferBlockMessage } from "./transfer-block.js";
+import { animeSearchTabooWarnings, type SearchProfile } from "./search-profile.js";
+import type { AuditEvent } from "../domain.js";
 
 /** Quality / subtitle / source tokens that PanSou share titles almost never carry,
  *  so appending them collapses recall (实测归零). Case-insensitive; word-ish so
@@ -22,6 +24,9 @@ const SUBTITLE_NAME_PATTERN = /\.(srt|ass|ssa|sub|idx|vtt|sup|smi)$/i;
 
 const STRIP_NOTICE =
   "已从关键词移除画质/字幕词(如 4K/1080p/蓝光/中字/字幕):PanSou 是通配符匹配,加这些只会把召回打成子集或归零,raw 裸标题召回最全。已改用裸标题搜索。";
+
+/** Threshold for large snapshot digestion hint (病3). */
+const LARGE_SNAPSHOT_DIGEST_THRESHOLD = 10;
 
 /** Strip quality/subtitle tokens from a search keyword and fold the resulting
  *  whitespace. `stripped` is true ONLY when an actual QUALITY_SUBTITLE_TOKEN was
@@ -81,6 +86,9 @@ export interface TaskSandboxOptions {
    *  the orchestrator pre-warms a subtitle snapshot and the agent gets
    *  viewSubtitleSnapshot / transferSubtitle tools. Undefined = no subtitle flow. */
   subtitleProvider?: AssrtProviderPort;
+  /** The task's fine-grained search profile — enables the anime taboo-keyword
+   *  validator (warnings only, never blocking). 病2b。 */
+  searchProfile?: SearchProfile;
 }
 
 export interface SearchToolResult {
@@ -97,6 +105,15 @@ export interface SearchToolResult {
   /** Set when quality/subtitle tokens were stripped from the agent's keyword
    *  (C5 guardrail): tells the agent the words were dropped and raw recalls more. */
   notice?: string;
+  /** Set when a deduped search is repeated: escalating warning with repeat count.
+   *  病2a: 模型必须看见「这是重复」。 */
+  repeatNotice?: string;
+  /** Anime taboo-keyword validator warnings (year / subtype word / suspected
+   *  cross-series token). Warnings only — the search still runs. 病2b。 */
+  warnings?: string[];
+  /** One-shot reminder that the PREVIOUS large snapshot (≥10 candidates) is
+   *  still unfiltered when the agent switches keywords. 病3: 先消化再换词。 */
+  digestHint?: string;
 }
 
 export interface TransferToolResult {
@@ -124,8 +141,11 @@ export class TaskSandbox {
   private readonly subtitleFallback: boolean;
   /** Reserve-zone threshold (movie 8+2) — undefined disables the reserve zone. */
   private readonly softThreshold: number | undefined;
+  private readonly profile: SearchProfile | undefined;
   private readonly seenKeywords = new Set<string>();
   private readonly snapshotByKeyword = new Map<string, ResourceSnapshotV2>();
+  /** 每个（规范化）关键词被搜索的次数——prime 记 1，agent fresh 记 1，dedup 命中递增。 */
+  private readonly searchCountByKeyword = new Map<string, number>();
   private readonly observedSnapshots = new Map<string, ResourceSnapshotV2>();
   private readonly obtainedCodes = new Set<string>();
   /** Set when the agent landed a movie via the 中文字幕 last-resort fallback (no
@@ -141,6 +161,10 @@ export class TaskSandbox {
   /** Pre-warmed assrt candidates (id + title + lang), like rawSnapshot for video.
    *  Reassigned by primeSubtitleSnapshot, so NOT readonly. */
   private subtitleSnapshot: AssrtCandidate[] | null = null;
+  /** 病3: 待消化的上一大快照（换词搜索时提醒一次，随即清空）。 */
+  private pendingDigest: { keyword: string; count: number } | null = null;
+  /** 病4: 本任务的审计事件（no_coverage 上报/dedup 重复/禁忌词警告）。runner 持久化到 workflowRun.auditEvents。 */
+  private readonly auditEvents: AuditEvent[] = [];
 
   constructor(options: TaskSandboxOptions) {
     this.provider = options.provider;
@@ -152,6 +176,7 @@ export class TaskSandbox {
     this.softThreshold = this.subtitleFallback ? MOVIE_SEARCH_SOFT_THRESHOLD : undefined;
     this.storage = options.storage;
     this.stagingDirectoryId = options.stagingDirectoryId;
+    this.profile = options.searchProfile;
     this.seasonDirs = new Map(
       Object.entries(options.targetSeasonDirectoryIds ?? {}).map(([season, id]) => [Number(season), id]),
     );
@@ -213,13 +238,49 @@ export class TaskSandbox {
     const normalized = normalizeSearchKeyword(effectiveKeyword);
     const notice = stripped.stripped ? STRIP_NOTICE : undefined;
 
+    // 病2b: anime taboo-keyword validator (warnings only, after title gate, before dedup).
+    const tabooWarnings = this.profile
+      ? animeSearchTabooWarnings({ keyword: effectiveKeyword, profile: this.profile, titleTerms: this.titleTerms })
+      : [];
+    if (tabooWarnings.length > 0) {
+      this.auditEvents.push({
+        type: "search_taboo_warning",
+        message: `搜索词「${effectiveKeyword}」触发动漫禁忌词警告 ${tabooWarnings.length} 条`,
+        data: { keyword: effectiveKeyword, warnings: tabooWarnings },
+      });
+    }
+
+    // 病3: take the digestion hint — only when switching keywords (the current
+    // normalized keyword differs from the pending one). The stored keyword is the
+    // EFFECTIVE (original-case) form for display — case-consistent with
+    // repeatNotice — so the comparison normalizes it first.
+    const digestHint =
+      this.pendingDigest && normalizeSearchKeyword(this.pendingDigest.keyword) !== normalized
+        ? `提示：上一快照「${this.pendingDigest.keyword}」有 ${this.pendingDigest.count} 个候选尚未筛过——候选列表就在你此前那次 searchResources 的返回里，回读不花预算；先消化再换词通常更快。`
+        : undefined;
+    if (digestHint) this.pendingDigest = null;
+
     // Check dedup FIRST — if this keyword was already searched (either by agent
     // or by system pre-warming), return the cached snapshot without hitting the
     // provider or consuming budget. This covers both agent re-searches and agent
     // searching a keyword that was pre-warmed.
     const cachedSnapshot = this.snapshotByKeyword.get(normalized);
     if (cachedSnapshot) {
-      return { snapshot: cachedSnapshot, deduped: true, ...(notice ? { notice } : {}) };
+      const count = (this.searchCountByKeyword.get(normalized) ?? 1) + 1;
+      this.searchCountByKeyword.set(normalized, count);
+      this.auditEvents.push({
+        type: "search_dedup",
+        message: `重复搜索「${effectiveKeyword}」第 ${count} 次`,
+        data: { keyword: effectiveKeyword, count },
+      });
+      return {
+        snapshot: cachedSnapshot,
+        deduped: true,
+        repeatNotice: this.repeatNotice(effectiveKeyword, count, cachedSnapshot.candidates.length),
+        ...(notice ? { notice } : {}),
+        ...(tabooWarnings.length > 0 ? { warnings: tabooWarnings } : {}),
+        ...(digestHint ? { digestHint } : {}),
+      };
     }
 
     const decision = decideSearchGate({
@@ -242,11 +303,22 @@ export class TaskSandbox {
     this.seenKeywords.add(normalized);
     const snapshot = await this.provider.search(effectiveKeyword);
     this.snapshotByKeyword.set(normalized, snapshot);
+    this.searchCountByKeyword.set(normalized, 1);
     this.observedSnapshots.set(snapshot.id, snapshot);
+
+    // 病3: register a large fresh snapshot for later digestion hint. Store the
+    // effective (original-case) keyword for display; the trigger comparison
+    // normalizes it.
+    if (snapshot.candidates.length >= LARGE_SNAPSHOT_DIGEST_THRESHOLD) {
+      this.pendingDigest = { keyword: effectiveKeyword, count: snapshot.candidates.length };
+    }
+
     return {
       snapshot,
       ...(decision === "reserve" ? { note: this.reserveNote() } : {}),
       ...(notice ? { notice } : {}),
+      ...(tabooWarnings.length > 0 ? { warnings: tabooWarnings } : {}),
+      ...(digestHint ? { digestHint } : {}),
     };
   }
 
@@ -264,6 +336,17 @@ export class TaskSandbox {
   private reserveNote(): string {
     const reserve = this.searchBudget - (this.softThreshold ?? this.searchBudget);
     return `⚠️ 中字搜索预算(${this.softThreshold})已用满,还剩 ${reserve} 次预留。用它做最后的裸名/抖动复搜;若仍找不到带中字的版本、但已确认正确影片的 raw 名匹配,就直接 transferCandidate 兜底落它(markObtained 带 subtitleFallback,系统标注「可能无中字」),不要 reportNoCoverage —— 有正片胜过没有,且该版实际未必无中字。`;
+  }
+
+  /** 病2a: dedup 强提示。第 2 次报次数；第 3-4 次升级警告；第 5 次起文本固定——
+   *  固定是刻意的：递增计数会让重复步骤的 result 每次不同，反而令 repetition-stop
+   *  的「4 连相同」永远不命中。 */
+  private repeatNotice(keyword: string, count: number, candidateCount: number): string {
+    if (count >= 5) {
+      return `⚠️ 「${keyword}」已重复多次搜索，结果不会再变（共 ${candidateCount} 候选）。这已被视为无进展：立即基于已有证据决策（transferCandidate 或 reportNoCoverage）。`;
+    }
+    const escalation = count >= 3 ? "再重复将视为无进展。" : "";
+    return `⚠️ 「${keyword}」已是第 ${count} 次搜索（结果与上次相同，共 ${candidateCount} 候选）。换实质不同的新词，或立即基于已有证据决策。${escalation}`;
   }
 
   /** Whether a snapshot id was actually observed in this task — the gate for
@@ -607,14 +690,31 @@ export class TaskSandbox {
 
   /** The agent honestly reports it cannot cover the target. This is only valid
    *  when a real provider search actually ran (§9): reporting no-coverage without
-   *  ever searching is an infrastructure failure, not an honest result. */
+   *  ever searching is an infrastructure failure, not an honest result.
+   *
+   *  Evidence base = the agent's own fresh searches ∪ every keyword a snapshot
+   *  was observed for — which includes the system's raw pre-warm. The prompt
+   *  tells the agent NOT to re-search the raw keyword (viewResourceSnapshot is
+   *  free), and even a re-search hits dedup without touching seenKeywords — so
+   *  counting only seenKeywords refused a well-behaved agent's honest report on
+   *  a truly-uncovered title and forced wasted turns (the 病1-style dead tail). */
   async reportNoCoverage(reason: string): Promise<{ reason: string; searchesPerformed: number }> {
-    if (this.seenKeywords.size === 0) {
+    const evidenceKeywords = new Set([...this.seenKeywords, ...this.snapshotByKeyword.keys()]);
+    if (evidenceKeywords.size === 0) {
       throw new Error(
         "SANDBOX_NO_PROVIDER_EVIDENCE: cannot report no-coverage before any real search ran (§9 infrastructure failure)",
       );
     }
-    return { reason, searchesPerformed: this.seenKeywords.size };
+    this.auditEvents.push({
+      type: "no_coverage_reported",
+      message: `agent 上报无覆盖：${reason}（已搜索 ${evidenceKeywords.size} 个词，含系统预搜）`,
+      data: { reason, searchesPerformed: evidenceKeywords.size },
+    });
+    return { reason, searchesPerformed: evidenceKeywords.size };
+  }
+
+  auditTrail(): AuditEvent[] {
+    return [...this.auditEvents];
   }
 
   /** Pre-warm a raw search (system-initiated, does NOT consume agent's distinct
@@ -629,6 +729,7 @@ export class TaskSandbox {
 
     // Record in dedup map so agent re-searching this keyword hits dedup
     this.snapshotByKeyword.set(normalized, snapshot);
+    this.searchCountByKeyword.set(normalized, 1);
 
     // Record in observed snapshots so transferCandidate can resolve candidate ids
     this.observedSnapshots.set(snapshot.id, snapshot);

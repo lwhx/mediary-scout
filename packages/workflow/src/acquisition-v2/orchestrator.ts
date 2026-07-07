@@ -1,5 +1,5 @@
 import type { LanguageModel } from "ai";
-import type { AgentDecision, ResourceSnapshot, TransferAttempt } from "../domain.js";
+import type { AgentDecision, AuditEvent, ResourceSnapshot, TransferAttempt } from "../domain.js";
 import type { ResourceProvider, StorageExecutor } from "../ports.js";
 import type { AcquisitionAgentResult } from "./agent-loop.js";
 import type { AgentToolEvent } from "./activity.js";
@@ -10,6 +10,7 @@ import { RealStorageV2 } from "./real-storage-adapter.js";
 import { budgetSoftThreshold } from "./agent-loop-guards.js";
 import { TaskSandbox } from "./sandbox.js";
 import { AssrtSubtitleProvider, type AssrtProviderPort } from "../subtitle-provider.js";
+import type { SearchProfile } from "./search-profile.js";
 import {
   needForMovie,
   needForTvTarget,
@@ -54,6 +55,9 @@ export interface RunAcquisitionV2Request {
   searchHints?: string;
   /** Rendered quality-preference guidance (召回后选片优先级), injected into the prompt. */
   qualityGuidance?: string;
+  /** The task's fine-grained search profile — enables the anime taboo-keyword
+   *  validator (warnings only, never blocking). 病2b。 */
+  searchProfile?: SearchProfile;
   /** The run's drive brand — selects the brand transfer model + dead-links section. */
   storageProvider?: string;
   /** Filters known-dead candidates from search results before the agent sees them,
@@ -81,6 +85,7 @@ export interface AcquisitionV2Outcome {
 
 export interface RunAcquisitionV2Result extends AcquisitionAgentResult {
   outcome: AcquisitionV2Outcome;
+  auditEvents: AuditEvent[];
 }
 
 export async function runAcquisitionV2(request: RunAcquisitionV2Request): Promise<RunAcquisitionV2Result> {
@@ -116,6 +121,7 @@ export async function runAcquisitionV2(request: RunAcquisitionV2Request): Promis
     // fallbacks ("2026 电影") at the tool boundary so they never burn a search.
     titleTerms: [request.target.title, ...request.target.aliases],
     ...(request.searchBudget === undefined ? {} : { searchBudget: request.searchBudget }),
+    ...(request.searchProfile === undefined ? {} : { searchProfile: request.searchProfile }),
   });
 
   // Pre-warm the raw snapshot (bare title) BEFORE building the system prompt, so the
@@ -211,7 +217,7 @@ export async function runAcquisitionV2(request: RunAcquisitionV2Request): Promis
     coverageMet: result.coverage.coverageMet,
     reason: result.text,
   });
-  return { ...result, outcome: { resourceSnapshots, decisions, transferAttempts } };
+  return { ...result, outcome: { resourceSnapshots, decisions, transferAttempts }, auditEvents: sandbox.auditTrail() };
 }
 
 /**

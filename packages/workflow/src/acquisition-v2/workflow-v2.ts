@@ -1,5 +1,6 @@
 import type { LanguageModel } from "ai";
 import type { ResourceProvider, StorageExecutor } from "../ports.js";
+import type { AuditEvent } from "../domain.js";
 import {
   ensureSeasonAcquisitionDirectories,
   withStagingCleanup,
@@ -10,6 +11,7 @@ import { readLandedSize } from "./landed-size.js";
 import type { AgentToolEvent } from "./activity.js";
 import { runAcquisitionV2, type AcquisitionV2Outcome } from "./orchestrator.js";
 import { syncSeasonNeed } from "./sync-need.js";
+import type { SearchProfile } from "./search-profile.js";
 
 /**
  * Phase 7c — the outer workflow orchestration (TV/anime). It is the same
@@ -47,6 +49,9 @@ export interface RunAcquisitionV2WorkflowRequest {
   originCountries?: string[];
   searchHints?: string;
   qualityGuidance?: string;
+  /** The task's fine-grained search profile — enables the anime taboo-keyword
+   *  validator (warnings only, never blocking). 病2b。 */
+  searchProfile?: SearchProfile;
   /** The run's drive brand ("pan115" | "quark") — selects brand-specific skill. */
   storageProvider?: string;
   /** assrt token (Settings → 字幕来源). Undefined = 字幕流程不触发。 */
@@ -69,6 +74,7 @@ export interface RunAcquisitionV2WorkflowResult {
    *  the notification's true per-episode size. Absent when the read failed/empty. */
   landedFileCount?: number;
   landedBytes?: number;
+  auditEvents: AuditEvent[];
 }
 
 const EMPTY_OUTCOME: AcquisitionV2Outcome = { resourceSnapshots: [], decisions: [], transferAttempts: [] };
@@ -111,6 +117,7 @@ export async function runAcquisitionV2Workflow(
       stillMissing: [],
       obtained: before.obtained,
       providerAhead: before.providerAhead,
+      auditEvents: [],
     };
   }
 
@@ -136,6 +143,7 @@ export async function runAcquisitionV2Workflow(
     ...(request.originCountries === undefined ? {} : { originCountries: request.originCountries }),
     ...(request.searchHints === undefined ? {} : { searchHints: request.searchHints }),
     ...(request.qualityGuidance === undefined ? {} : { qualityGuidance: request.qualityGuidance }),
+    ...(request.searchProfile === undefined ? {} : { searchProfile: request.searchProfile }),
     ...(request.storageProvider === undefined ? {} : { storageProvider: request.storageProvider }),
     ...(request.assrtToken === undefined ? {} : { assrtToken: request.assrtToken }),
     ...(request.deadLinkStore ? { deadLinkStore: request.deadLinkStore } : {}),
@@ -166,6 +174,7 @@ export async function runAcquisitionV2Workflow(
     stillMissing: after.missing,
     obtained: after.obtained,
     providerAhead: after.providerAhead,
+    auditEvents: v2.auditEvents,
     ...(landed ? { landedFileCount: landed.fileCount, landedBytes: landed.totalBytes } : {}),
   };
     },
